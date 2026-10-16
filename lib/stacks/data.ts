@@ -90,6 +90,7 @@ export class DataStack extends Stack {
       vpc: props.vpc,
       databases: secrets,
       logRetention: retention(config.observability.logRetentionDays),
+      generation: db.loginGeneration,
     });
 
     const alarm = (

@@ -34,17 +34,22 @@ Option 3.
 - It is served under `/auth` through CloudFront (ADR-0004), with `KC_HOSTNAME` set to the public
   URL so tokens carry the issuer the API expects. The API fetches signing keys over Service
   Connect from a private address.
-- The admin console is not public; administrators reach it with an ECS Exec port-forward. The
+- The admin console is not public — the load balancer forwards only the `occ` realm and static
+  resources — and `KC_HOSTNAME_ADMIN` points it at `localhost`, where administrators reach it with
+  an ECS Exec port-forward. The
   bootstrap administrator is for first sign-in only; the runbook replaces it with named
   administrators and adds the site's identity provider (Entra ID or any OIDC/SAML directory).
 
 ## Consequences
 
-- The platform now runs and upgrades an identity provider. Keycloak releases are pinned in the
-  image and upgraded deliberately.
-- **One node.** Running two needs Keycloak's distributed cache configured for ECS (JDBC-based
-  discovery); until then an outage of the task means no new sign-ins, while signed-in consoles
-  keep working until their tokens expire.
+- The platform now runs and upgrades an identity provider. The image pins a Keycloak minor
+  release (26.8, as the command center's Compose stack does); patch releases arrive when the image
+  is rebuilt, and a minor upgrade is a deliberate change.
+- **One node, local cache** (`KC_CACHE=local`). Keycloak 26 would otherwise try to form a cluster
+  through the database, and two nodes with separate caches must never serve side by side, so a
+  release stops the old task before starting the new one: sign-in is unavailable for the minute
+  a release takes, while signed-in consoles keep working until their tokens need refreshing.
+  Running two nodes means opening the cluster port between Keycloak tasks and testing failover.
 - With Keycloak in the platform, service-to-service authentication (platform ADR-0006) has a
   natural answer: a confidential client with a service account for the pipeline.
 

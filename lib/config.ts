@@ -42,6 +42,11 @@ export interface StageConfig {
     deletionProtection: boolean;
     /** Each system gets its own database and login on the instance (platform ADR-0003). */
     databases: readonly DatabaseName[];
+    /**
+     * Bump to re-run the database bootstrap, e.g. after putting a new password in a system's
+     * secret (docs/runbook.md). The bootstrap otherwise runs only when the set of databases changes.
+     */
+    loginGeneration: number;
   };
 
   commandCenter: {
@@ -96,8 +101,15 @@ export interface SiteValues {
     /** ACM certificate in the stage's region, for the load balancer's HTTPS listener. */
     loadBalancerCertificateArn: string;
   };
-  /** HLS base URL of the site's media relay, reachable from the VPC (VPN or Direct Connect). */
-  cameraHlsBaseUrl: string;
+  /**
+   * The site's media relay (MediaMTX). The API hands these URLs to operators' browsers, so they
+   * must be reachable from wherever operators work, not only from the VPC.
+   */
+  camera: {
+    hlsBaseUrl: string;
+    webRtcBaseUrl: string;
+    protocol: 'hls' | 'webrtc';
+  };
   /** Where alarm notifications go. */
   alarmEmail: string;
 }
@@ -117,6 +129,7 @@ const staging: StageConfig = {
     backupRetentionDays: 3,
     deletionProtection: false,
     databases: ['ops', 'keycloak', 'telemetry'],
+    loginGeneration: 1,
   },
   commandCenter: {
     api: { cpu: 512, memoryMiB: 1024, minTasks: 2, maxTasks: 3, targetCpuPercent: 60 },
@@ -150,6 +163,7 @@ const production: StageConfig = {
     backupRetentionDays: 14,
     deletionProtection: true,
     databases: ['ops', 'keycloak', 'telemetry'],
+    loginGeneration: 1,
   },
   commandCenter: {
     api: { cpu: 1024, memoryMiB: 2048, minTasks: 2, maxTasks: 6, targetCpuPercent: 60 },

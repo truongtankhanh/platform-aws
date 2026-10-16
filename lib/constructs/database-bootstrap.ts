@@ -15,11 +15,13 @@ export interface DatabaseBootstrapProps {
   /** Database (and owning login) name → secret with `{ username, password }`. */
   databases: Record<string, secretsmanager.ISecret>;
   logRetention: logs.RetentionDays;
+  /** Changing it re-runs the bootstrap (new passwords in the system secrets reach PostgreSQL). */
+  generation: number;
 }
 
 /**
  * Creates each system's database and login on the shared instance (lambda/database-bootstrap).
- * Runs on every deploy that changes the set of databases, and is safe to run again.
+ * Runs when the set of databases or the generation changes, and is safe to run again.
  */
 export class DatabaseBootstrap extends Construct {
   readonly function: NodejsFunction;
@@ -75,6 +77,7 @@ export class DatabaseBootstrap extends Construct {
         host: props.instance.dbInstanceEndpointAddress,
         port: props.instance.dbInstanceEndpointPort,
         masterSecretArn: props.instance.secret!.secretArn,
+        generation: String(props.generation),
         databases: Object.fromEntries(
           Object.entries(props.databases).map(([name, secret]) => [name, secret.secretArn]),
         ),
