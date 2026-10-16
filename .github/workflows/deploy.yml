@@ -1,0 +1,112 @@
+name: Deploy
+
+# Manual, per stage. Never run from this public repository: it needs an AWS account, the
+# deploy role and the stage's site values, configured as a GitHub environment (docs/runbook.md).
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: Stage to deploy
+        type: choice
+        options: [staging, production]
+        required: true
+      occ_ref:
+        description: ops-command-center ref to build
+        default: main
+        required: true
+      itp_ref:
+        description: iot-telemetry-pipeline ref to build
+        default: main
+        required: true
+
+concurrency:
+  group: deploy-${{ inputs.stage }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write # GitHub OIDC → IAM role; no access keys are stored anywhere.
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.stage }}
+    env:
+      AWS_REGION: ap-southeast-1
+      STAGE: ${{ inputs.stage }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          repository: truongtankhanh/ops-command-center
+          ref: ${{ inputs.occ_ref }}
+          path: occ
+      - uses: actions/checkout@v5
+        with:
+          repository: truongtankhanh/iot-telemetry-pipeline
+          ref: ${{ inputs.itp_ref }}
+          path: itp
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Stage context
+        id: context
+        # Passed through the environment, never interpolated into the script (script injection).
+        env:
+          SITE_JSON: ${{ vars.SITE_JSON }}
+        run: |
+          tag="$(git -C occ rev-parse --short HEAD)-$(git -C itp rev-parse --short HEAD)-${GITHUB_RUN_NUMBER}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          args="-c stage=$STAGE -c imageTag=$tag"
+          if [ -n "$SITE_JSON" ]; then
+            printf '%s' "$SITE_JSON" > site.json
+            args="$args -c siteFile=site.json"
+          fi
+          echo "args=$args" >> "$GITHUB_OUTPUT"
+          echo "prefix=Platform-${STAGE^}" >> "$GITHUB_OUTPUT"
+
+      # Repositories first: the services below pull images by tag.
+      - run: npx cdk deploy "${{ steps.context.outputs.prefix }}-Registry" ${{ steps.context.outputs.args }} --require-approval never
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+
+      - name: Build and push images
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          TAG: ${{ steps.context.outputs.tag }}
+        run: |
+          repo() { echo "$REGISTRY/platform-$STAGE/$1:$TAG"; }
+          docker build -f occ/apps/api/Dockerfile -t occ-api-base occ
+          docker build --build-arg BASE_IMAGE=occ-api-base -t "$(repo occ-api)" images/occ-api
+          docker build -f itp/apps/ingest/Dockerfile -t ingest-base itp
+          docker build --build-arg BASE_IMAGE=ingest-base -t "$(repo ingest)" images/ingest
+          scripts/prepare-realm.sh occ/ops/keycloak/occ-realm.json
+          docker build -t "$(repo keycloak)" images/keycloak
+          for image in occ-api ingest keycloak; do docker push "$(repo "$image")"; done
+
+      - run: npx cdk deploy --all ${{ steps.context.outputs.args }} --require-approval never
+
+      - name: Publish the console
+        run: |
+          outputs() {
+            aws cloudformation describe-stacks --stack-name "${{ steps.context.outputs.prefix }}-CommandCenter" \
+              --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text
+          }
+          corepack enable
+          (cd occ && pnpm install --frozen-lockfile && pnpm --filter @occ/console build)
+          bucket="$(outputs ConsoleBucketName)"
+          # Hashed assets are immutable; index.html must always be revalidated.
+          aws s3 sync occ/apps/console/dist "s3://$bucket" --delete --exclude index.html \
+            --cache-control "public,max-age=31536000,immutable"
+          aws s3 cp occ/apps/console/dist/index.html "s3://$bucket/index.html" --cache-control "no-cache"
+          aws cloudfront create-invalidation --distribution-id "$(outputs DistributionId)" --paths "/index.html"
+          echo "Deployed: $(outputs PublicUrl)" >> "$GITHUB_STEP_SUMMARY"

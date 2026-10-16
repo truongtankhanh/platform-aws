@@ -1,0 +1,13 @@
+{
+  "app": "npx tsx bin/platform.ts",
+  "watch": {
+    "include": ["bin/**", "lib/**", "lambda/**"]
+  },
+  "context": {
+    "stage": "staging",
+    "@aws-cdk/aws-ecs:disableEcsImdsBlocking": true,
+    "@aws-cdk/aws-ecs:enableImdsBlockingDeprecatedFeature": false,
+    "@aws-cdk/core:target-partitions": ["aws"],
+    "@aws-cdk/core:defaultCrossStackReferences": "strong"
+  }
+}

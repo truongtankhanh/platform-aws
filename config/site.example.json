@@ -1,0 +1,9 @@
+{
+  "domain": {
+    "name": "ops.langbiang-campus.example",
+    "cloudFrontCertificateArn": "arn:aws:acm:us-east-1:111111111111:certificate/00000000-0000-0000-0000-000000000001",
+    "loadBalancerCertificateArn": "arn:aws:acm:ap-southeast-1:111111111111:certificate/00000000-0000-0000-0000-000000000002"
+  },
+  "cameraHlsBaseUrl": "https://media.site.langbiang-campus.example:8888",
+  "alarmEmail": "ops-alerts@langbiang-campus.example"
+}
