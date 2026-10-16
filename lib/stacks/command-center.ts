@@ -36,6 +36,18 @@ const API_PORT = 3000;
 const API_METRICS_PORT = 9464;
 const KEYCLOAK_PORT = 8080;
 const KEYCLOAK_MANAGEMENT_PORT = 9000;
+const ORIGIN_VERIFY_HEADER = 'X-Origin-Verify';
+const VIEWER_IP_HEADER = 'X-Viewer-Address';
+/** Keycloak paths the console's sign-in uses; nothing else under /auth is forwarded. */
+export const KEYCLOAK_PUBLIC_PATHS = ['/auth/realms/occ/*', '/auth/resources/*', '/auth/js/*'];
+/** Paths under /auth that could normalise to somewhere else (ALB path patterns are case-sensitive). */
+const AMBIGUOUS_AUTH_PATHS = [
+  '/auth/*..*',
+  '/auth/*%2e*',
+  '/auth/*%2E*',
+  '/auth/*%2f*',
+  '/auth/*%2F*',
+];
 
 /**
  * ops-command-center: the operator console (static, on S3 behind CloudFront), the API (Fargate,
@@ -124,16 +136,15 @@ export class CommandCenterStack extends Stack {
           defaultAction: elbv2.ListenerAction.fixedResponse(404),
         });
 
-    // Keycloak's admin console is not served publicly; administrators reach it through an
-    // ECS Exec port-forward (docs/runbook.md).
-    listener.addAction('BlockKeycloakAdmin', {
-      priority: 5,
-      conditions: [elbv2.ListenerCondition.pathPatterns(['/auth/admin', '/auth/admin/*'])],
-      action: elbv2.ListenerAction.fixedResponse(403, {
-        contentType: 'text/plain',
-        messageBody: 'Forbidden',
-      }),
+    // The prefix list admits every CloudFront distribution, not only this one. CloudFront adds a
+    // secret header to each origin request and the listener forwards nothing without it.
+    const originVerify = new secretsmanager.Secret(this, 'OriginVerify', {
+      description: 'Header value CloudFront sends to the load balancer (X-Origin-Verify)',
+      generateSecretString: { excludePunctuation: true, passwordLength: 48 },
     });
+    const fromThisDistribution = elbv2.ListenerCondition.httpHeader(ORIGIN_VERIFY_HEADER, [
+      originVerify.secretValue.unsafeUnwrap(),
+    ]);
 
     this.addWaf(alb);
 
@@ -147,18 +158,33 @@ export class CommandCenterStack extends Stack {
       ),
     });
 
+    // X-Forwarded-For starts with whatever the viewer sent, so it cannot key a rate limit. This
+    // function overwrites a header with the address CloudFront saw the connection from.
+    const viewerAddress = new cloudfront.Function(this, 'ViewerAddress', {
+      runtime: cloudfront.FunctionRuntime.JS_2_0,
+      code: cloudfront.FunctionCode.fromInline(
+        `function handler(event) { event.request.headers['${VIEWER_IP_HEADER}'] = { value: event.viewer.ip }; return event.request; }`,
+      ),
+    });
+
     const albOrigin = new origins.LoadBalancerV2Origin(alb, {
       protocolPolicy: site
         ? cloudfront.OriginProtocolPolicy.HTTPS_ONLY
         : cloudfront.OriginProtocolPolicy.HTTP_ONLY,
       readTimeout: Duration.seconds(60),
+      customHeaders: { [ORIGIN_VERIFY_HEADER]: originVerify.secretValue.unsafeUnwrap() },
     });
     const toAlb: cloudfront.BehaviorOptions = {
       origin: albOrigin,
       viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
       allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
       cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
-      originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+      // Host is forwarded: with a custom domain CloudFront then validates the load balancer's
+      // certificate against that domain instead of the *.elb.amazonaws.com name.
+      originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
+      functionAssociations: [
+        { function: viewerAddress, eventType: cloudfront.FunctionEventType.VIEWER_REQUEST },
+      ],
     };
 
     this.distribution = new cloudfront.Distribution(this, 'Distribution', {
@@ -227,8 +253,12 @@ export class CommandCenterStack extends Stack {
         KC_DB_USERNAME: 'keycloak',
         // Tokens carry this issuer; it must be the URL browsers use (OCC ADR-0010).
         KC_HOSTNAME: `${this.publicUrl}/auth`,
+        // The admin console is never public; it is opened through an ECS Exec port-forward.
+        KC_HOSTNAME_ADMIN: `http://localhost:${KEYCLOAK_PORT}/auth`,
         KC_HTTP_ENABLED: 'true',
         KC_PROXY_HEADERS: 'xforwarded',
+        // One node, no cluster: Keycloak 26 would otherwise try to form one over JDBC_PING.
+        KC_CACHE: 'local',
         KC_BOOTSTRAP_ADMIN_USERNAME: 'platform-admin',
       },
       secrets: {
@@ -251,10 +281,11 @@ export class CommandCenterStack extends Stack {
     const keycloak = new ecs.FargateService(this, 'Keycloak', {
       cluster: props.cluster,
       taskDefinition: keycloakTask,
-      // One node: clustering Keycloak needs a distributed cache configuration (docs/adr/0006).
+      // One node with a local cache (docs/adr/0006): a release stops the old task before starting
+      // the new one, so two nodes with separate caches never serve side by side.
       desiredCount: 1,
-      minHealthyPercent: 100,
-      maxHealthyPercent: 200,
+      minHealthyPercent: 0,
+      maxHealthyPercent: 100,
       securityGroups: [keycloakSecurityGroup],
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
       circuitBreaker: { rollback: true },
@@ -273,9 +304,26 @@ export class CommandCenterStack extends Stack {
       'Keycloak',
     );
 
+    // Keycloak normalises paths it receives; the load balancer matches them raw. A path that could
+    // normalise out of the allowed prefixes (dot segments, encoded dots or slashes) is refused
+    // before any forwarding rule sees it.
+    listener.addAction('RefuseAmbiguousAuthPaths', {
+      priority: 10,
+      conditions: [elbv2.ListenerCondition.pathPatterns(AMBIGUOUS_AUTH_PATHS)],
+      action: elbv2.ListenerAction.fixedResponse(400, {
+        contentType: 'text/plain',
+        messageBody: 'Bad request',
+      }),
+    });
+
+    // Only what the console's sign-in needs reaches Keycloak: the occ realm and static resources.
+    // Everything else under /auth — the admin console, the master realm — falls through to 404.
     listener.addTargets('KeycloakTargets', {
       priority: 30,
-      conditions: [elbv2.ListenerCondition.pathPatterns(['/auth', '/auth/*'])],
+      conditions: [
+        elbv2.ListenerCondition.pathPatterns(KEYCLOAK_PUBLIC_PATHS),
+        fromThisDistribution,
+      ],
       port: KEYCLOAK_PORT,
       protocol: elbv2.ApplicationProtocol.HTTP,
       targets: [
@@ -332,7 +380,13 @@ export class CommandCenterStack extends Stack {
         SEED_ON_BOOT: String(demo),
         SIMULATOR_ENABLED: String(demo),
         CAMERA_SOURCE: site ? 'mediamtx' : 'mock',
-        ...(site ? { MEDIAMTX_HLS_URL: site.cameraHlsBaseUrl, MEDIAMTX_PROTOCOL: 'hls' } : {}),
+        ...(site
+          ? {
+              MEDIAMTX_HLS_URL: site.camera.hlsBaseUrl,
+              MEDIAMTX_WEBRTC_URL: site.camera.webRtcBaseUrl,
+              MEDIAMTX_PROTOCOL: site.camera.protocol,
+            }
+          : {}),
         TELEMETRY_SOURCE: cc.telemetrySource,
         TELEMETRY_MOCK_SCENARIO: String(demo && cc.telemetrySource === 'mock'),
       },
@@ -407,7 +461,10 @@ export class CommandCenterStack extends Stack {
 
     const apiTargets = listener.addTargets('ApiTargets', {
       priority: 20,
-      conditions: [elbv2.ListenerCondition.pathPatterns(['/api/*', '/socket.io/*'])],
+      conditions: [
+        elbv2.ListenerCondition.pathPatterns(['/api/*', '/socket.io/*']),
+        fromThisDistribution,
+      ],
       port: API_PORT,
       protocol: elbv2.ApplicationProtocol.HTTP,
       targets: [api.loadBalancerTarget({ containerName: 'api', containerPort: API_PORT })],
@@ -481,7 +538,8 @@ export class CommandCenterStack extends Stack {
   /**
    * Edge protection on the load balancer: AWS managed rule groups, plus per-client rate limits that
    * mirror the Compose stack's nginx limits (OCC ADR-0012: 20 r/s on /api, 2 r/s on handshakes).
-   * Behind CloudFront the client is the first address in X-Forwarded-For.
+   * The key is the viewer address CloudFront writes into its own header, not X-Forwarded-For,
+   * whose first entry the client controls.
    */
   private addWaf(alb: elbv2.ApplicationLoadBalancer): void {
     const rateRule = (name: string, priority: number, path: string, perMinute: number) => ({
@@ -493,7 +551,7 @@ export class CommandCenterStack extends Stack {
           limit: perMinute,
           evaluationWindowSec: 60,
           aggregateKeyType: 'FORWARDED_IP',
-          forwardedIpConfig: { headerName: 'X-Forwarded-For', fallbackBehavior: 'MATCH' },
+          forwardedIpConfig: { headerName: VIEWER_IP_HEADER, fallbackBehavior: 'MATCH' },
           scopeDownStatement: {
             byteMatchStatement: {
               fieldToMatch: { uriPath: {} },

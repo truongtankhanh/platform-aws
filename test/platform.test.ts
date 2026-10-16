@@ -94,6 +94,7 @@ describe('database', () => {
   it('creates one database and login per system through the bootstrap', () => {
     const t = staging.template('data');
     t.hasResourceProperties('Custom::DatabaseBootstrap', {
+      generation: '1',
       databases: { ops: Match.anyValue(), keycloak: Match.anyValue(), telemetry: Match.anyValue() },
     });
     for (const name of ['ops', 'keycloak', 'telemetry']) {
@@ -150,25 +151,41 @@ describe('command center', () => {
     expect(flatten(config.Origins)).toContain('OriginAccessControlId');
   });
 
-  it('never serves the Keycloak admin console publicly', () => {
+  it('forwards only the sign-in paths to Keycloak, and only requests from this distribution', () => {
     const t = staging.template('commandCenter');
-    t.hasResourceProperties('AWS::ElasticLoadBalancingV2::ListenerRule', {
-      Priority: 5,
-      Conditions: [
-        Match.objectLike({ PathPatternConfig: { Values: ['/auth/admin', '/auth/admin/*'] } }),
-      ],
-      Actions: [
-        Match.objectLike({
-          Type: 'fixed-response',
-          FixedResponseConfig: Match.objectLike({ StatusCode: '403' }),
-        }),
-      ],
+    const all = Object.values(t.findResources('AWS::ElasticLoadBalancingV2::ListenerRule'));
+    // Ambiguous paths (dot segments, encoded dots or slashes) are refused before forwarding.
+    const refuse = all.find((r) => r.Properties.Priority === 10)!;
+    expect(refuse.Properties.Actions[0].FixedResponseConfig.StatusCode).toBe('400');
+    expect(flatten(refuse.Properties.Conditions)).toContain('/auth/*..*');
+    const rules = all.filter((r) => r.Properties.Priority !== 10);
+    expect(rules).toHaveLength(2);
+    for (const r of rules) expect(r.Properties.Priority).toBeGreaterThan(10);
+    const paths = rules.flatMap((r) =>
+      r.Properties.Conditions.flatMap(
+        (c: { PathPatternConfig?: { Values: string[] } }) => c.PathPatternConfig?.Values ?? [],
+      ),
+    );
+    expect(paths.sort()).toEqual(
+      ['/api/*', '/socket.io/*', '/auth/realms/occ/*', '/auth/resources/*', '/auth/js/*'].sort(),
+    );
+    // Neither the admin console nor the master realm is reachable: the default action is 404.
+    expect(paths.some((p) => p === '/auth/*' || p.startsWith('/auth/admin'))).toBe(false);
+    t.hasResourceProperties('AWS::ElasticLoadBalancingV2::Listener', {
+      DefaultActions: [Match.objectLike({ Type: 'fixed-response' })],
     });
-    // The block comes before the rule that forwards /auth to Keycloak.
-    t.hasResourceProperties('AWS::ElasticLoadBalancingV2::ListenerRule', {
-      Priority: 30,
-      Conditions: [Match.objectLike({ PathPatternConfig: { Values: ['/auth', '/auth/*'] } })],
-    });
+    for (const rule of rules) {
+      const header = rule.Properties.Conditions.find(
+        (c: { Field: string }) => c.Field === 'http-header',
+      );
+      expect(header.HttpHeaderConfig.HttpHeaderName).toBe('X-Origin-Verify');
+      expect(flatten(header.HttpHeaderConfig.Values)).toContain('resolve:secretsmanager');
+    }
+    // CloudFront sends the same secret, resolved at deploy time, never written in the template.
+    const distribution = Object.values(t.findResources('AWS::CloudFront::Distribution'))[0]!;
+    const origins = flatten(distribution.Properties.DistributionConfig.Origins);
+    expect(origins).toContain('X-Origin-Verify');
+    expect(origins).toContain('resolve:secretsmanager');
   });
 
   it('rate-limits per client like the Compose stack, keyed on the forwarded address', () => {
@@ -191,6 +208,17 @@ describe('command center', () => {
       'api-per-client': [1200, 'FORWARDED_IP'],
       'socket-handshakes-per-client': [120, 'FORWARDED_IP'],
     });
+    // Keyed on the address CloudFront saw, which a CloudFront Function writes on every request
+    // to the load balancer — not on X-Forwarded-For, whose first entry the client controls.
+    expect(flatten(acl.Properties.Rules)).toContain('"HeaderName":"X-Viewer-Address"');
+    expect(flatten(acl.Properties.Rules)).not.toContain('X-Forwarded-For');
+    const fn = Object.values(t.findResources('AWS::CloudFront::Function')).find((f) =>
+      flatten(f).includes('event.viewer.ip'),
+    )!;
+    expect(flatten(fn)).toContain('X-Viewer-Address');
+    const behaviors = Object.values(t.findResources('AWS::CloudFront::Distribution'))[0]!.Properties
+      .DistributionConfig.CacheBehaviors;
+    for (const b of behaviors) expect(b.FunctionAssociations).toHaveLength(1);
     t.resourceCountIs('AWS::WAFv2::WebACLAssociation', 1);
   });
 
@@ -244,6 +272,9 @@ describe('command center', () => {
       DEMO_MODE: 'false',
       SEED_ON_BOOT: 'false',
       CAMERA_SOURCE: 'mediamtx',
+      MEDIAMTX_HLS_URL: 'https://media.langbiang-campus.example:8888',
+      MEDIAMTX_WEBRTC_URL: 'https://media.langbiang-campus.example:8889',
+      MEDIAMTX_PROTOCOL: 'webrtc',
       TELEMETRY_SOURCE: 'off',
     });
   });
@@ -258,6 +289,14 @@ describe('command center', () => {
       'KC_BOOTSTRAP_ADMIN_PASSWORD',
       'KC_DB_PASSWORD',
     ]);
+    // One node with a local cache; a release replaces it instead of running two side by side.
+    expect(env.KC_CACHE).toBe('local');
+    expect(env.KC_HOSTNAME_ADMIN).toBe('http://localhost:8080/auth');
+    production.template('commandCenter').hasResourceProperties('AWS::ECS::Service', {
+      DesiredCount: 1,
+      DeploymentConfiguration: Match.objectLike({ MinimumHealthyPercent: 0, MaximumPercent: 100 }),
+      EnableExecuteCommand: true,
+    });
   });
 
   it('turns metrics into CloudWatch metrics inside the task, with no open metrics port', () => {
@@ -334,6 +373,15 @@ describe('telemetry', () => {
       GroupDescription: 'Telemetry ingest tasks: outbound only',
       SecurityGroupIngress: Match.absent(),
     });
+  });
+
+  it('alarms on silence only where devices are expected', () => {
+    const silence = (x: Synthesised) =>
+      Object.values(x.template('telemetry').findResources('AWS::CloudWatch::Alarm')).filter(
+        (a) => a.Properties.MetricName === 'telemetry_readings_total',
+      );
+    expect(silence(staging)).toHaveLength(0);
+    expect(silence(production)).toHaveLength(1);
   });
 
   it('alarms on any lost message', () => {

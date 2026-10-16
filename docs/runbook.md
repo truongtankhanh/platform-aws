@@ -57,8 +57,8 @@ on its own. A failed CloudFormation update rolls back the stack.
 ## After the first deployment
 
 1. **Keycloak administrators.** Read the bootstrap administrator from the secret in the
-   `KeycloakAdminSecretArn` output, then open the admin console through ECS Exec — it is blocked
-   on the public URL:
+   `KeycloakAdminSecretArn` output, then open the admin console through ECS Exec — the public URL does
+   not forward it:
 
    ```bash
    # ECS Exec port-forward to the Keycloak task (the service has execute-command enabled)
@@ -94,12 +94,13 @@ messages are rejected as `unknown_device`.
 
 ## Rotating credentials
 
-| Credential                | How                                                                                                                                                    |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Database admin login      | Automatic, every 30 days.                                                                                                                              |
-| A system's database login | Put a new password in its secret, redeploy the Data stack (the bootstrap sets it in PostgreSQL), then force a new deployment of that system's service. |
-| Ingest IoT certificate    | Change the certificate construct's id and redeploy: a new certificate is written to a new secret, the service restarts on it, the old one is deleted.  |
-| Keycloak bootstrap admin  | Not rotated: deleted after named administrators exist.                                                                                                 |
+| Credential                | How                                                                                                                                                                                                                |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Database admin login      | Automatic, every 30 days.                                                                                                                                                                                          |
+| A system's database login | Put a new password in its secret, increment `database.loginGeneration` in `lib/config.ts` and redeploy the Data stack (the bootstrap sets it in PostgreSQL), then force a new deployment of that system's service. |
+| Ingest IoT certificate    | Change the certificate construct's id and redeploy: a new certificate is written to a new secret, the service restarts on it, the old one is deleted.                                                              |
+| CloudFront origin header  | Change the `OriginVerify` construct's id and redeploy the CommandCenter stack: CloudFront and the listener switch together.                                                                                        |
+| Keycloak bootstrap admin  | Not rotated: deleted after named administrators exist.                                                                                                                                                             |
 
 ## Where to look
 

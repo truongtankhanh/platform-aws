@@ -35,8 +35,9 @@ Option 3, as one construct (`MetricsSidecar`) used by both services.
 ## Consequences
 
 - Each task carries a small extra container (64 CPU units, 128 MiB reserved). It is not
-  essential: if it stops, the service keeps serving and the alarms on its metrics go to
-  insufficient data.
+  essential: if it stops, the service keeps serving. Alarms built on its metrics then see no data:
+  the gap alarm stays quiet, and the "no readings for 15 minutes" alarm (production only, where
+  devices are expected) fires, which is the signal that metrics or ingest have stopped.
 - Prometheus-style queries (rates across replicas, histograms) are less natural in CloudWatch;
   the load balancer's own metrics cover latency.
 - The collector image is pinned, because its configuration format changes between releases.

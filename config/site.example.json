@@ -4,6 +4,10 @@
     "cloudFrontCertificateArn": "arn:aws:acm:us-east-1:111111111111:certificate/00000000-0000-0000-0000-000000000001",
     "loadBalancerCertificateArn": "arn:aws:acm:ap-southeast-1:111111111111:certificate/00000000-0000-0000-0000-000000000002"
   },
-  "cameraHlsBaseUrl": "https://media.site.langbiang-campus.example:8888",
-  "alarmEmail": "ops-alerts@langbiang-campus.example"
+  "alarmEmail": "ops-alerts@langbiang-campus.example",
+  "camera": {
+    "hlsBaseUrl": "https://media.langbiang-campus.example:8888",
+    "webRtcBaseUrl": "https://media.langbiang-campus.example:8889",
+    "protocol": "webrtc"
+  }
 }

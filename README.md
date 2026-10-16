@@ -30,8 +30,7 @@ flowchart LR
 - **Security checked on every synth.** `cdk-nag`'s AWS Solutions rules run in CI; each accepted
   finding is acknowledged on the exact resource that raised it, with its reason
   ([`lib/nag.ts`](lib/nag.ts)). A new finding fails the build, and a test proves it does.
-- **Least privilege you can read in the tests.** Only CloudFront's address ranges reach the load
-  balancer; the database accepts only named security groups; the ingest service may subscribe to
+- **Least privilege you can read in the tests.** Only this CloudFront distribution reaches the load balancer (its address ranges plus a secret origin header), which forwards an allowlist of paths; the database accepts only named security groups; the ingest service may subscribe to
   exactly one shared MQTT filter; a device may publish only to its own topic, as itself; every
   secret comes from Secrets Manager and no environment variable holds one.
 - **No private key in CloudFormation.** IoT client certificates are created by a custom resource
@@ -40,7 +39,7 @@ flowchart LR
   custom resource, tested against a real PostgreSQL in CI, including that one system cannot open
   another's database.
 - **One public origin**, as on premises: the console, API and Keycloak share a CloudFront domain,
-  so the services run unchanged; WAF rate limits mirror the Compose stack's nginx limits.
+  so the services run unchanged; WAF rate limits mirror the Compose stack's nginx limits, keyed on the address CloudFront saw rather than a header the client can forge.
 - **Metrics without a metrics server**: an OpenTelemetry collector in each task turns the
   services' Prometheus endpoints into CloudWatch metrics; alarms cover 5xx, readiness, latency,
   database headroom and any lost telemetry message.

@@ -120,6 +120,13 @@ const ACKNOWLEDGEMENTS: Acknowledgement[] = [
       'Rotated by procedure, not by a rotation function: the Keycloak bootstrap admin is replaced by named administrators after first sign-in, and the IoT certificate is rotated by replacing the custom resource (docs/runbook.md).',
   },
 
+  {
+    path: /\/OriginVerify\/Resource$/,
+    id: 'AwsSolutions::AwsSolutions-SMG4',
+    reason:
+      'CloudFront and the load balancer read this value at deploy time; a rotation function would change it under both and drop every request until the next deploy. Rotated by deploying a new secret (docs/runbook.md).',
+  },
+
   // ---------------------------------------------------------------- ECS
   {
     path: /(KeycloakTask|ApiTask|IngestTask)\/Resource$/,

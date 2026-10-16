@@ -230,20 +230,23 @@ export class TelemetryStack extends Stack {
           'Devices reported sequence gaps: messages were lost between device and database',
       }),
     );
-    props.alarms.watch(
-      new cloudwatch.Alarm(this, 'NoReadings', {
-        metric: new cloudwatch.Metric({
-          namespace: 'Platform/Telemetry',
-          metricName: 'telemetry_readings_total',
-          statistic: 'Sum',
-          period: Duration.minutes(5),
+    // Only where devices are expected: a demo stage has none, and would alarm for ever.
+    if (config.site) {
+      props.alarms.watch(
+        new cloudwatch.Alarm(this, 'NoReadings', {
+          metric: new cloudwatch.Metric({
+            namespace: 'Platform/Telemetry',
+            metricName: 'telemetry_readings_total',
+            statistic: 'Sum',
+            period: Duration.minutes(5),
+          }),
+          threshold: 1,
+          comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+          evaluationPeriods: 3,
+          treatMissingData: cloudwatch.TreatMissingData.BREACHING,
+          alarmDescription: 'No readings stored for 15 minutes',
         }),
-        threshold: 1,
-        comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
-        evaluationPeriods: 3,
-        treatMissingData: cloudwatch.TreatMissingData.BREACHING,
-        alarmDescription: 'No readings stored for 15 minutes',
-      }),
-    );
+      );
+    }
   }
 }
