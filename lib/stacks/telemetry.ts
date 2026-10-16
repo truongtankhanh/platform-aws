@@ -6,7 +6,7 @@ import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as iot from 'aws-cdk-lib/aws-iot';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import type * as rds from 'aws-cdk-lib/aws-rds';
-import type * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import type { Construct } from 'constructs';
 import type { StageConfig } from '../config.js';
@@ -18,6 +18,8 @@ import { retention } from '../retention.js';
 
 export interface TelemetryStackProps extends StackProps {
   config: StageConfig;
+  /** ops-command-center's API and Keycloak, which alert delivery calls over Service Connect. */
+  commandCenter: { api: ec2.ISecurityGroup; keycloak: ec2.ISecurityGroup };
   vpc: ec2.IVpc;
   cluster: ecs.ICluster;
   database: rds.DatabaseInstance;
@@ -31,6 +33,7 @@ export const TELEMETRY_TOPIC_FILTER = 'campus/+/+/telemetry';
 export const SHARE_GROUP = 'ingest';
 export const INGEST_CLIENT_ID_PREFIX = 'ingest';
 const INGEST_PORT = 3100;
+const PIPELINE_CLIENT_ID = 'telemetry-pipeline';
 
 /**
  * iot-telemetry-pipeline on AWS: AWS IoT Core is the broker, the ingest service runs on Fargate
@@ -116,6 +119,13 @@ export class TelemetryStack extends Stack {
 
     // ---------------------------------------------------------------- ingest service
 
+    // Keycloak generates this client's secret when it imports the realm (scripts/prepare-realm.sh
+    // removes the demo value); an administrator copies it here once (docs/runbook.md). Until then
+    // deliveries fail with invalid_client and the outbox keeps them for retry.
+    const clientSecret = new secretsmanager.Secret(this, 'PipelineClientSecret', {
+      description: `Keycloak client secret of ${PIPELINE_CLIENT_ID} (occ realm), copied from Keycloak`,
+    });
+
     const task = new ecs.FargateTaskDefinition(this, 'IngestTask', {
       cpu: ingest.cpu,
       memoryLimitMiB: ingest.memoryMiB,
@@ -133,14 +143,18 @@ export class TelemetryStack extends Stack {
         MQTT_CLIENT_ID_PREFIX: INGEST_CLIENT_ID_PREFIX,
         MQTT_CONNECTIONS: String(ingest.mqttConnections),
         MIGRATE_ON_BOOT: 'true',
-        // Alerts are recorded but not delivered: ops-command-center now requires an OIDC token,
-        // and the pipeline has no client-credentials flow yet (docs/adr/0003, "Not yet").
-        OCC_API_URL: '',
+        // Alerts become incidents in ops-command-center, over Service Connect, authenticated with
+        // the pipeline's client credentials (its ADR-0006). Keycloak's hostname is fixed to the
+        // public URL, so a token fetched on this internal address still carries the public issuer.
+        OCC_API_URL: `http://occ-api:3000/api`,
+        OCC_TOKEN_URL: `http://keycloak:8080/auth/realms/occ/protocol/openid-connect/token`,
+        OCC_CLIENT_ID: PIPELINE_CLIENT_ID,
       },
       secrets: {
         PGPASSWORD: ecs.Secret.fromSecretsManager(props.telemetryLogin, 'password'),
         MQTT_CERT_PEM: ecs.Secret.fromSecretsManager(certificate.secret, 'certificatePem'),
         MQTT_KEY_PEM: ecs.Secret.fromSecretsManager(certificate.secret, 'privateKey'),
+        OCC_CLIENT_SECRET: ecs.Secret.fromSecretsManager(clientSecret),
       },
       healthCheck: {
         command: [
@@ -195,8 +209,24 @@ export class TelemetryStack extends Stack {
       securityGroups: [securityGroup],
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
       circuitBreaker: { rollback: true },
+      // A Service Connect client: resolves `occ-api` and `keycloak`, publishes nothing.
+      serviceConnectConfiguration: {},
     });
     service.node.addDependency(certificate);
+    // Created here, not on the command center's side, so that stack never depends on this one.
+    for (const [id, target, port] of [
+      ['IngestToApi', props.commandCenter.api, 3000],
+      ['IngestToKeycloak', props.commandCenter.keycloak, 8080],
+    ] as const) {
+      new ec2.CfnSecurityGroupIngress(this, id, {
+        groupId: target.securityGroupId,
+        sourceSecurityGroupId: securityGroup.securityGroupId,
+        ipProtocol: 'tcp',
+        fromPort: port,
+        toPort: port,
+        description: 'Telemetry ingest delivers alerts',
+      });
+    }
     allowDatabaseAccess(
       this,
       'IngestToDatabase',

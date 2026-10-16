@@ -53,9 +53,10 @@ repository**: no AWS account is attached to it, so the deploy workflow has never
 anything that only a live account can prove (IoT policy evaluation, Keycloak behind CloudFront,
 the collector's metric conversion) is marked in the ADRs as designed rather than observed.
 
-Two integrations are deliberately not connected yet, with the reason and the way forward in
-[ADR-0003](docs/adr/0003-aws-iot-core-as-the-broker.md#consequences): the command center's own
-MQTT telemetry, and alert delivery from the pipeline to the command center.
+Telemetry alerts become incidents in the command center: the pipeline authenticates with client
+credentials against the platform's Keycloak and calls the API over Service Connect. One
+integration is deliberately not connected yet — the command center's own MQTT telemetry — with
+the reason and the way forward in [ADR-0003](docs/adr/0003-aws-iot-core-as-the-broker.md#consequences).
 
 ## Repository
 

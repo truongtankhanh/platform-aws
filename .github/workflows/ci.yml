@@ -61,7 +61,10 @@ jobs:
           path: occ
       - run: scripts/prepare-realm.sh occ/ops/keycloak/occ-realm.json
       - run: docker build -t platform-keycloak:ci images/keycloak
-      - name: The realm has no demo users
+      - name: The realm has no demo users and no demo secrets
         run: |
           docker run --rm --entrypoint cat platform-keycloak:ci /opt/keycloak/data/import/occ-realm.json \
-            | jq -e '.users == null and (.clients | map(.clientId) | index("occ-console"))'
+            | jq -e '
+                (.users | all(.serviceAccountClientId != null))
+                and (.clients | all(has("secret") | not))
+                and (.clients | map(.clientId) | index("occ-console"))'
