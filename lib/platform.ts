@@ -51,6 +51,10 @@ export function buildPlatform(app: App, config: StageConfig): Platform {
     cluster: network.cluster,
     database: data.instance,
     telemetryLogin: data.secrets.telemetry,
+    commandCenter: {
+      api: commandCenter.apiSecurityGroup,
+      keycloak: commandCenter.keycloakSecurityGroup,
+    },
     ingestRepository: registry.repositories.ingest,
     alarms: network.alarms,
   });

@@ -72,9 +72,15 @@ on its own. A failed CloudFormation update rolls back the stack.
    identity provider (OIDC or SAML) in the `occ` realm. Map directory groups to the realm roles
    only if the site asks for it (platform ADR-0005).
 
-2. **Custom domain.** Point the domain at the `DistributionDomainName` output (alias or CNAME).
+2. **The pipeline's client secret.** Keycloak generated a secret for the `telemetry-pipeline`
+   client when it imported the realm. In the admin console (same port-forward), open **Clients →
+   telemetry-pipeline → Credentials**, copy the secret into the `PipelineClientSecret` secret
+   (Telemetry stack), then force a new deployment of the ingest service. Alerts raised before
+   this were kept in the outbox and are delivered then.
 
-3. **Alarm subscription.** Confirm the e-mail AWS sends to the alarm address.
+3. **Custom domain.** Point the domain at the `DistributionDomainName` output (alias or CNAME).
+
+4. **Alarm subscription.** Confirm the e-mail AWS sends to the alarm address.
 
 ## Registering a device
 
@@ -100,6 +106,7 @@ messages are rejected as `unknown_device`.
 | A system's database login | Put a new password in its secret, increment `database.loginGeneration` in `lib/config.ts` and redeploy the Data stack (the bootstrap sets it in PostgreSQL), then force a new deployment of that system's service. |
 | Ingest IoT certificate    | Change the certificate construct's id and redeploy: a new certificate is written to a new secret, the service restarts on it, the old one is deleted.                                                              |
 | CloudFront origin header  | Change the `OriginVerify` construct's id and redeploy the CommandCenter stack: CloudFront and the listener switch together.                                                                                        |
+| Pipeline client secret    | Regenerate it in Keycloak (Clients → telemetry-pipeline → Credentials), copy it to `PipelineClientSecret`, force a new ingest deployment. Deliveries in between are retried.                                       |
 | Keycloak bootstrap admin  | Not rotated: deleted after named administrators exist.                                                                                                                                                             |
 
 ## Where to look
@@ -110,4 +117,5 @@ messages are rejected as `unknown_device`.
 | Sign-in works, every API call is 401    | API logs: issuer or audience mismatch — `OIDC_ISSUER` must equal the public URL + `/auth/realms/occ` |
 | API 503 "Identity provider unavailable" | API cannot reach `keycloak:8080` over Service Connect; Keycloak task running?                        |
 | `SequenceGaps` alarm                    | Ingest tasks running? Connection count high enough for the load (tasks × connections × 100/s)?       |
+| Alerts not becoming incidents           | Ingest logs: `invalid_client` means the client secret in Secrets Manager differs from Keycloak's     |
 | `NoReadings` alarm                      | Devices connected (IoT Core metrics); ingest logs for subscribe or policy errors                     |

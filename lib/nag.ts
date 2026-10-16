@@ -114,10 +114,10 @@ const ACKNOWLEDGEMENTS: Acknowledgement[] = [
     reason: 'The AwsCustomResource function is created by CDK with its own pinned runtime.',
   },
   {
-    path: /(KeycloakAdmin|IngestCertificate\/Secret)\/Resource$/,
+    path: /(KeycloakAdmin|IngestCertificate\/Secret|PipelineClientSecret)\/Resource$/,
     id: 'AwsSolutions::AwsSolutions-SMG4',
     reason:
-      'Rotated by procedure, not by a rotation function: the Keycloak bootstrap admin is replaced by named administrators after first sign-in, and the IoT certificate is rotated by replacing the custom resource (docs/runbook.md).',
+      'Rotated by procedure, not by a rotation function: the Keycloak bootstrap admin is replaced by named administrators after first sign-in, the IoT certificate is rotated by replacing the custom resource, and the pipeline client secret is regenerated in Keycloak and copied here (docs/runbook.md).',
   },
 
   {

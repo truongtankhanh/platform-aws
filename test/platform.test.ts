@@ -357,11 +357,34 @@ describe('telemetry', () => {
       MQTT_SHARE_GROUP: 'ingest',
       MQTT_CLIENT_ID_PREFIX: 'ingest',
       MQTT_CONNECTIONS: '4',
-      OCC_API_URL: '',
     });
     expect(flatten(env.DATABASE_URL)).toMatch(/^.*postgres:\/\/telemetry@.*sslmode=verify-full/);
     expect(flatten(env.DATABASE_URL)).not.toMatch(/telemetry:[^@]*@/);
-    expect(secretNamesOf(ingest!).sort()).toEqual(['MQTT_CERT_PEM', 'MQTT_KEY_PEM', 'PGPASSWORD']);
+    expect(secretNamesOf(ingest!).sort()).toEqual([
+      'MQTT_CERT_PEM',
+      'MQTT_KEY_PEM',
+      'OCC_CLIENT_SECRET',
+      'PGPASSWORD',
+    ]);
+  });
+
+  it('delivers alerts to the command center over Service Connect, with client credentials', () => {
+    const t = staging.template('telemetry');
+    const [ingest] = containers(t, 'IngestTask');
+    expect(environmentOf(ingest!)).toMatchObject({
+      OCC_API_URL: 'http://occ-api:3000/api',
+      OCC_TOKEN_URL: 'http://keycloak:8080/auth/realms/occ/protocol/openid-connect/token',
+      OCC_CLIENT_ID: 'telemetry-pipeline',
+    });
+    // A Service Connect client: it resolves the command center's names and publishes none.
+    t.hasResourceProperties('AWS::ECS::Service', {
+      ServiceConnectConfiguration: Match.objectLike({ Enabled: true }),
+    });
+    const ports = Object.values(t.findResources('AWS::EC2::SecurityGroupIngress'))
+      .filter((r) => r.Properties.Description === 'Telemetry ingest delivers alerts')
+      .map((r) => r.Properties.FromPort)
+      .sort();
+    expect(ports).toEqual([3000, 8080]);
   });
 
   it('keeps the subscription group populated during deploys and accepts no inbound traffic', () => {

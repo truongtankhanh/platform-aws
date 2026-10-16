@@ -81,11 +81,12 @@ stacks change only with a deliberate infrastructure change.
 
 - **iot-telemetry-pipeline** — client certificates from PEM secrets and several MQTT connections
   per replica (its ITP-19), because AWS IoT Core requires the first and caps delivery per
-  connection (ADR-0003).
+  connection (ADR-0003); and client credentials with an idempotency key per alert (ITP-20), which
+  every deployment needs since the command center requires tokens.
 - **ops-command-center** — no code: it already reads every setting from the environment, verifies
   the database certificate, runs as several replicas, and keeps its metrics port internal.
-  Two capabilities would let it do more here (ADR-0003, "Not yet connected"): client certificates
-  for its MQTT telemetry, and accepting a service account's token for alerts from the pipeline.
+  Its realm gained the pipeline's client (OCC-29). One capability would let it do more here
+  (ADR-0003): client certificates for its MQTT telemetry.
 
 ## Decisions
 

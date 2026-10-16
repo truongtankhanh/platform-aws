@@ -61,6 +61,9 @@ export class CommandCenterStack extends Stack {
   readonly distribution: cloudfront.Distribution;
   readonly consoleBucket: s3.Bucket;
   readonly publicUrl: string;
+  /** Security groups other stacks may be let into (the telemetry pipeline delivers alerts). */
+  readonly apiSecurityGroup: ec2.SecurityGroup;
+  readonly keycloakSecurityGroup: ec2.SecurityGroup;
 
   constructor(scope: Construct, id: string, props: CommandCenterStackProps) {
     super(scope, id, props);
@@ -274,10 +277,14 @@ export class CommandCenterStack extends Stack {
       }),
     });
 
-    const keycloakSecurityGroup = new ec2.SecurityGroup(this, 'KeycloakSecurityGroup', {
-      vpc: props.vpc,
-      description: 'Keycloak tasks',
-    });
+    const keycloakSecurityGroup = (this.keycloakSecurityGroup = new ec2.SecurityGroup(
+      this,
+      'KeycloakSecurityGroup',
+      {
+        vpc: props.vpc,
+        description: 'Keycloak tasks',
+      },
+    ));
     const keycloak = new ecs.FargateService(this, 'Keycloak', {
       cluster: props.cluster,
       taskDefinition: keycloakTask,
@@ -427,10 +434,14 @@ export class CommandCenterStack extends Stack {
       removalPolicy: removal,
     });
 
-    const apiSecurityGroup = new ec2.SecurityGroup(this, 'ApiSecurityGroup', {
-      vpc: props.vpc,
-      description: 'ops-command-center API tasks',
-    });
+    const apiSecurityGroup = (this.apiSecurityGroup = new ec2.SecurityGroup(
+      this,
+      'ApiSecurityGroup',
+      {
+        vpc: props.vpc,
+        description: 'ops-command-center API tasks',
+      },
+    ));
     const api = new ecs.FargateService(this, 'Api', {
       cluster: props.cluster,
       taskDefinition: apiTask,

@@ -54,17 +54,15 @@ Option 3.
   device policy. Fleet provisioning is not built yet; the runbook describes registering a device
   by hand.
 - Message volume is billed per message. The sizing notes show the levers.
-- **Not yet connected:**
-  - **The command center's own asset telemetry.** Its MQTT client authenticates with a password and
-    cannot set ALPN, so it cannot reach IoT Core. On AWS it runs with `TELEMETRY_SOURCE=mock` in
-    staging and `off` in production until it supports client certificates (the change the
-    pipeline needed in ITP-19).
-  - **Alert delivery from the pipeline to the command center.** The command center now requires
-    an OIDC access token on every request, and the pipeline has no client-credentials flow, so
-    `OCC_API_URL` is unset and alerts are recorded only. This is the open question of
-    [platform ADR-0006](https://github.com/truongtankhanh/architecture-decisions/blob/main/decisions/0006-service-to-service-authentication.md);
-    with Keycloak in the platform, a confidential client with a service account is the obvious
-    answer.
+- **Not yet connected: the command center's own asset telemetry.** Its MQTT client
+  authenticates with a password and cannot set ALPN, so it cannot reach IoT Core. On AWS it runs
+  with `TELEMETRY_SOURCE=mock` in staging and `off` in production until it supports client
+  certificates (the change the pipeline needed in ITP-19).
+- **Alert delivery to the command center** is connected: the pipeline authenticates with client
+  credentials against the platform's Keycloak (its ADR-0006, ITP-20; the realm client is
+  ops-command-center OCC-29) and calls the API over Service Connect. Keycloak generates the
+  client's secret on import; an administrator copies it to Secrets Manager once (runbook), and
+  until then deliveries are kept in the outbox and retried.
 
 ## Verification
 
