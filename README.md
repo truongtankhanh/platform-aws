@@ -70,7 +70,7 @@ lambda/                    custom-resource handlers (database bootstrap, IoT cer
 images/                    platform layers: RDS CA for the services, Keycloak with the realm
 scripts/prepare-realm.sh   the command center's realm without its demo users
 test/                      assertions on the synthesised templates
-docs/                      architecture, ADRs, runbook
+docs/                      architecture, ADRs, runbook, handover guide
 ```
 
 ## Working on it
@@ -83,6 +83,7 @@ npm run synth:production    # production, with the example site values
 ```
 
 Deploying needs an account, a deploy role and per-stage settings: [runbook](docs/runbook.md).
+Taking over the repository, or making your first change: [handover guide](docs/handover.md).
 
 ## Decisions
 
