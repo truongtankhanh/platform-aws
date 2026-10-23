@@ -4,8 +4,13 @@ import type * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
 import { logGroup, type LogPolicy } from '../retention.js';
 
-/** Pinned: the collector's config format changes between releases. */
-export const ADOT_COLLECTOR_IMAGE = 'public.ecr.aws/aws-observability/aws-otel-collector:v0.50.0';
+/**
+ * Pinned by version and digest: the collector's config format changes between releases, and a tag
+ * can be moved. The digest is the multi-arch index (the tasks run on ARM64); take a new one with
+ * `docker buildx imagetools inspect <image>:<version>`.
+ */
+export const ADOT_COLLECTOR_IMAGE =
+  'public.ecr.aws/aws-observability/aws-otel-collector:v0.50.0@sha256:7968fb60db6a2390a47ba6a2df029745638486e285c9b2487da1b722d0855a3e';
 
 export interface MetricDeclaration {
   /** Label sets to publish as CloudWatch dimensions, e.g. `[['service'], ['service', 'route']]`. */

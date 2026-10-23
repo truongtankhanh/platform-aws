@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  # A weekly run finds what changes without a commit here: a new advisory, or another repository
+  # moving the files this one builds from.
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -16,6 +21,7 @@ jobs:
   verify:
     name: Lint, typecheck, test, synth (both stages, cdk-nag)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     services:
       postgres:
         image: postgres:17-alpine
@@ -28,13 +34,14 @@ jobs:
           --health-timeout 3s
           --health-retries 10
     env:
-      # The database bootstrap's integration test runs against this throwaway server.
+      # The database bootstrap's integration test runs against this throwaway server. The test
+      # fails, rather than skipping, if CI runs without it.
       TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
       - run: npm ci
       - run: npm run format:check
@@ -44,18 +51,46 @@ jobs:
       # Synthesis runs every AWS Solutions check; an unacknowledged finding fails here.
       - run: npm run synth
       - run: npm run synth:production
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: cloud-assembly
           path: cdk.out
           retention-days: 7
 
+  workflows:
+    name: Workflows and scripts are well-formed
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      # rhysd/actionlint 1.7.12, pinned by digest; it only reads this checkout.
+      - run: >-
+          docker run --rm -v "$PWD:/repo" -w /repo
+          rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+          -color
+      - run: shellcheck scripts/*.sh
+
+  image-layers:
+    name: Platform image layers build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      # In the Deploy workflow these layers sit on images built from the two services. A plain base
+      # is enough to check what the layers add themselves: the RDS certificate bundle download.
+      - run: docker build --build-arg BASE_IMAGE=node:24-alpine -t platform-occ-api:ci images/occ-api
+      - run: docker build --build-arg BASE_IMAGE=node:24-alpine -t platform-ingest:ci images/ingest
+
+  # Builds from ops-command-center's current main on purpose: it is the check that notices when
+  # that repository moves or changes the realm. For the same reason it is not a gate on merging
+  # here; a red result means "look at the other repository", not "this change is wrong".
   keycloak-image:
     name: Keycloak image builds from the current realm
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           repository: truongtankhanh/ops-command-center
           path: occ
@@ -68,3 +103,18 @@ jobs:
                 (.users | all(.serviceAccountClientId != null))
                 and (.clients | all(has("secret") | not))
                 and (.clients | map(.clientId) | index("occ-console"))'
+
+  # Only on the weekly run and by hand: a new advisory must not block an unrelated pull request.
+  audit:
+    name: npm audit
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm audit --audit-level=high

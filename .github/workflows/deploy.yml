@@ -2,6 +2,13 @@ name: Deploy
 
 # Manual, per stage. Never run from this public repository: it needs an AWS account, the
 # deploy role and the stage's site values, configured as a GitHub environment (docs/runbook.md).
+#
+# Two jobs, so that code from the other two repositories never runs next to AWS credentials:
+#   build  - checks out and builds ops-command-center and iot-telemetry-pipeline (their
+#            dependencies' install scripts and Dockerfile steps run here). No AWS access, no
+#            OIDC token, read-only repository token.
+#   deploy - holds the OIDC token. Runs only this repository's code and handles the build's
+#            output (images, console files) as data: it pushes, uploads and checks them.
 on:
   workflow_dispatch:
     inputs:
@@ -10,13 +17,13 @@ on:
         type: choice
         options: [staging, production]
         required: true
+      # No default: a deployment names what it ships. Use a commit SHA or a release tag; a branch
+      # name builds whatever it points to at that moment.
       occ_ref:
-        description: ops-command-center ref to build
-        default: main
+        description: ops-command-center commit SHA or tag to build
         required: true
       itp_ref:
-        description: iot-telemetry-pipeline ref to build
-        default: main
+        description: iot-telemetry-pipeline commit SHA or tag to build
         required: true
 
 concurrency:
@@ -25,34 +32,104 @@ concurrency:
 
 permissions:
   contents: read
-  id-token: write # GitHub OIDC → IAM role; no access keys are stored anywhere.
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
-    environment: ${{ inputs.stage }}
-    env:
-      AWS_REGION: ap-southeast-1
-      STAGE: ${{ inputs.stage }}
+    timeout-minutes: 30
+    outputs:
+      tag: ${{ steps.tag.outputs.value }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           repository: truongtankhanh/ops-command-center
           ref: ${{ inputs.occ_ref }}
           path: occ
-      - uses: actions/checkout@v5
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           repository: truongtankhanh/iot-telemetry-pipeline
           ref: ${{ inputs.itp_ref }}
           path: itp
-      - uses: actions/setup-node@v5
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
-          node-version: 24
+          node-version-file: .nvmrc
+
+      - name: Image tag
+        id: tag
+        run: |
+          # The ECR repositories are immutable, so a re-run of the whole workflow (same run number)
+          # must not push the same tag again: the attempt number keeps every tag unique.
+          tag="$(git -C occ rev-parse --short HEAD)-$(git -C itp rev-parse --short HEAD)-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+          echo "value=$tag" >> "$GITHUB_OUTPUT"
+
+      # Local names only: the registry belongs to the stage and is known to the deploy job.
+      - name: Build the images
+        env:
+          TAG: ${{ steps.tag.outputs.value }}
+        run: |
+          docker build -f occ/docker/api/Dockerfile -t occ-api-base occ
+          docker build --build-arg BASE_IMAGE=occ-api-base -t "platform/occ-api:$TAG" images/occ-api
+          docker build -f itp/apps/ingest/Dockerfile -t ingest-base itp
+          docker build --build-arg BASE_IMAGE=ingest-base -t "platform/ingest:$TAG" images/ingest
+          scripts/prepare-realm.sh occ/docker/keycloak/occ-realm.json
+          docker build -t "platform/keycloak:$TAG" images/keycloak
+          docker save "platform/occ-api:$TAG" "platform/ingest:$TAG" "platform/keycloak:$TAG" \
+            | gzip > images.tar.gz
+
+      - name: Build the console
+        run: |
+          corepack enable
+          cd occ
+          pnpm install --frozen-lockfile
+          pnpm --filter @occ/console build
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: images
+          path: images.tar.gz
+          compression-level: 0 # already gzip
+          retention-days: 1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: console
+          path: occ/apps/console/dist
+          retention-days: 1
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: ${{ inputs.stage }}
+    permissions:
+      contents: read
+      id-token: write # GitHub OIDC → IAM role; no access keys are stored anywhere.
+    env:
+      AWS_REGION: ap-southeast-1
+      STAGE: ${{ inputs.stage }}
+      TAG: ${{ needs.build.outputs.tag }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .nvmrc
           cache: npm
       - run: npm ci
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: images
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: console
+          path: console-dist
 
-      - uses: aws-actions/configure-aws-credentials@v5
+      - uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5.1.1
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -63,11 +140,7 @@ jobs:
         env:
           SITE_JSON: ${{ vars.SITE_JSON }}
         run: |
-          # The ECR repositories are immutable, so a re-run of this workflow (same run number) must
-          # not push the same tag again: the attempt number keeps every tag unique.
-          tag="$(git -C occ rev-parse --short HEAD)-$(git -C itp rev-parse --short HEAD)-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          args="-c stage=$STAGE -c imageTag=$tag"
+          args="-c stage=$STAGE -c imageTag=$TAG"
           if [ -n "$SITE_JSON" ]; then
             printf '%s' "$SITE_JSON" > site.json
             args="$args -c siteFile=site.json"
@@ -78,37 +151,68 @@ jobs:
       # Repositories first: the services below pull images by tag.
       - run: npx cdk deploy "${{ steps.context.outputs.prefix }}-Registry" ${{ steps.context.outputs.args }} --require-approval never
 
-      - uses: aws-actions/amazon-ecr-login@v2
+      - uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
         id: ecr
 
-      - name: Build and push images
+      - name: Push the images
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
-          TAG: ${{ steps.context.outputs.tag }}
         run: |
-          repo() { echo "$REGISTRY/platform-$STAGE/$1:$TAG"; }
-          docker build -f occ/docker/api/Dockerfile -t occ-api-base occ
-          docker build --build-arg BASE_IMAGE=occ-api-base -t "$(repo occ-api)" images/occ-api
-          docker build -f itp/apps/ingest/Dockerfile -t ingest-base itp
-          docker build --build-arg BASE_IMAGE=ingest-base -t "$(repo ingest)" images/ingest
-          scripts/prepare-realm.sh occ/docker/keycloak/occ-realm.json
-          docker build -t "$(repo keycloak)" images/keycloak
-          for image in occ-api ingest keycloak; do docker push "$(repo "$image")"; done
+          gunzip -c images.tar.gz | docker load
+          for image in occ-api ingest keycloak; do
+            target="$REGISTRY/platform-$STAGE/$image:$TAG"
+            # Tags are immutable and this tag names this build's content, so a tag that is already
+            # there (a re-run of a failed deploy job) holds the same image: skip it. Any other
+            # error from ECR must stop the deployment.
+            if err="$(aws ecr describe-images --repository-name "platform-$STAGE/$image" \
+              --image-ids "imageTag=$TAG" 2>&1 > /dev/null)"; then
+              echo "$image:$TAG is already in ECR, not pushing again"
+              continue
+            fi
+            case "$err" in
+              *ImageNotFoundException*) ;;
+              *) echo "$err" >&2; exit 1 ;;
+            esac
+            docker tag "platform/$image:$TAG" "$target"
+            docker push "$target"
+          done
 
       - run: npx cdk deploy --all ${{ steps.context.outputs.args }} --require-approval never
 
       - name: Publish the console
+        env:
+          STACK: ${{ steps.context.outputs.prefix }}-CommandCenter
         run: |
-          outputs() {
-            aws cloudformation describe-stacks --stack-name "${{ steps.context.outputs.prefix }}-CommandCenter" \
-              --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text
-          }
-          corepack enable
-          (cd occ && pnpm install --frozen-lockfile && pnpm --filter @occ/console build)
-          bucket="$(outputs ConsoleBucketName)"
+          bucket="$(scripts/stack-output.sh "$STACK" ConsoleBucketName)"
           # Hashed assets are immutable; index.html must always be revalidated.
-          aws s3 sync occ/apps/console/dist "s3://$bucket" --delete --exclude index.html \
+          aws s3 sync console-dist "s3://$bucket" --delete --exclude index.html \
             --cache-control "public,max-age=31536000,immutable"
-          aws s3 cp occ/apps/console/dist/index.html "s3://$bucket/index.html" --cache-control "no-cache"
-          aws cloudfront create-invalidation --distribution-id "$(outputs DistributionId)" --paths "/index.html"
-          echo "Deployed: $(outputs PublicUrl)" >> "$GITHUB_STEP_SUMMARY"
+          aws s3 cp console-dist/index.html "s3://$bucket/index.html" --cache-control "no-cache"
+          aws cloudfront create-invalidation \
+            --distribution-id "$(scripts/stack-output.sh "$STACK" DistributionId)" --paths "/index.html"
+
+      # A release whose tasks never become healthy rolls back on its own (circuit breaker), but a
+      # release that starts and then cannot serve would otherwise end as a green run. Failing here
+      # does not roll anything back: it tells whoever started the deployment to look (runbook).
+      - name: Check the release through the public URL
+        env:
+          STACK: ${{ steps.context.outputs.prefix }}-CommandCenter
+        run: |
+          url="$(scripts/stack-output.sh "$STACK" PublicUrl)"
+          host="${url#https://}"
+          # With a custom domain the name may not point at CloudFront yet, and CloudFront must be
+          # asked under that name (the load balancer's certificate is validated against it, ADR-0004):
+          # connect to the distribution's address, send the public name.
+          edge="$(scripts/stack-output.sh "$STACK" DistributionDomainName)"
+          ip="$(getent ahostsv4 "$edge" | awk 'NR==1 { print $1 }')"
+          [ -n "$ip" ] || { echo "Cannot resolve $edge" >&2; exit 1; }
+          check() {
+            curl --fail --silent --show-error --output /dev/null --max-time 20 \
+              --retry 20 --retry-delay 15 --retry-all-errors \
+              --resolve "$host:443:$ip" "$url$1"
+            echo "ok  $1"
+          }
+          check /api/health/ready
+          check /auth/realms/occ/.well-known/openid-configuration
+          check /
+          echo "Deployed and answering: $url" >> "$GITHUB_STEP_SUMMARY"

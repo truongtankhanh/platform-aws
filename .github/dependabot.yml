@@ -1,0 +1,33 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      # Released together and tested together: one pull request each.
+      aws-sdk:
+        patterns: ['@aws-sdk/*']
+      aws-cdk:
+        patterns: ['aws-cdk', 'aws-cdk-lib', 'cdk-nag', 'constructs']
+      lint-and-format:
+        patterns: ['eslint', '@eslint/*', 'typescript-eslint', 'prettier', 'globals']
+    ignore:
+      # The Lambdas and CI run on Node 24, and type definitions follow the runtime, not `latest`.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
+      # typescript-eslint caps the TypeScript version it supports, so a major waits for it.
+      - dependency-name: typescript
+        update-types: ['version-update:semver-major']
+
+  # Actions are pinned by commit SHA (with the version in a comment); this keeps them current.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ['*']

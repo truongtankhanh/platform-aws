@@ -15,4 +15,14 @@ jq '
   .users = ((.users // []) | map(select(.serviceAccountClientId != null)))
   | .clients = (.clients | map(if .publicClient == false then del(.secret) else . end))
 ' "$source_realm" > "$out"
+# Fail here, not only in a later job: the realm must still hold the console client, no client may
+# carry a secret, and no user may remain except a client's service account.
+if ! jq -e '
+  (.clients | map(.clientId) | index("occ-console"))
+  and (.clients | all(has("secret") | not))
+  and (.users | all(.serviceAccountClientId != null))
+' "$out" > /dev/null; then
+  echo "prepare-realm.sh: $out still has a client secret or a user, or lost the occ-console client" >&2
+  exit 1
+fi
 echo "Realm written to $out: $(jq '.clients | length' "$out") clients, $(jq '.roles.realm | length' "$out") roles, $(jq '.users | length' "$out") service accounts, demo users and secrets removed"

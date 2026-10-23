@@ -36,8 +36,8 @@ first deployment and day-to-day operation take.
    ```
 
    Its permissions: assume the CDK bootstrap roles (`cdk-*-deploy-role`, `cdk-*-file-publishing-role`,
-   `cdk-*-image-publishing-role`, `cdk-*-lookup-role`), push to the stage's ECR repositories, write
-   to the console bucket, create CloudFront invalidations, and read stack outputs.
+   `cdk-*-image-publishing-role`, `cdk-*-lookup-role`), push to and describe images in the stage's
+   ECR repositories, write to the console bucket, create CloudFront invalidations, and read stack outputs.
 
 3. **GitHub environments** `staging` and `production`, each with:
    - `AWS_DEPLOY_ROLE_ARN` — the role above;
@@ -47,15 +47,29 @@ first deployment and day-to-day operation take.
 
 ## Deploying
 
-Run the **Deploy** workflow with the stage and the refs of the two systems. It deploys the
-registry, builds and pushes the three images tagged `<occ sha>-<itp sha>-<run>-<attempt>`, deploys
-every stack with that tag, then publishes the console and invalidates `index.html`. The
-repositories are immutable, so each tag exists once; re-running a failed workflow gets a new
-attempt number and therefore a new tag. A manual `cdk deploy` must pass `-c imageTag=<tag>`; without
-it the tasks ask for the tag `unset-pass-imageTag`, which does not exist, and roll back.
+Run the **Deploy** workflow with the stage and the refs of the two systems (a commit SHA or release
+tag for each; there is no default, and a branch name builds whatever it points to at that moment).
+The workflow has two jobs:
+
+1. **build** builds the three images (tagged `<occ sha>-<itp sha>-<run>-<attempt>`) and the console
+   from the two systems' code. It has no AWS access and no OIDC token: their install scripts and
+   Dockerfile steps run without credentials. Its output is kept for one day.
+2. **deploy** (the `production` reviewers approve here, after the build) deploys the registry,
+   pushes the images, deploys every stack with that tag, publishes the console and invalidates
+   `index.html`, then checks the release through the public URL: `/api/health/ready`, Keycloak's
+   OIDC discovery document and the console page, retrying for about five minutes.
+
+The repositories are immutable, so each tag exists once. Re-running the **whole** workflow gets a new
+attempt number and therefore a new tag. Re-running only the failed **deploy** job keeps the build's
+tag; images already in ECR under it are the same content and are not pushed again (this needs
+`ecr:DescribeImages` on the stage's repositories in the deploy role). A manual `cdk deploy` must pass
+`-c imageTag=<tag>`; without it the tasks ask for the tag `unset-pass-imageTag`, which does not
+exist, and roll back.
 
 ECS deployments roll with a circuit breaker: a release whose tasks never become healthy rolls back
-on its own. A failed CloudFormation update rolls back the stack.
+on its own. A failed CloudFormation update rolls back the stack. A red final check is different: the
+stacks are deployed and nothing is rolled back. Look at the service logs and the alarms, then
+either fix forward or deploy the previous refs again.
 
 ## After the first deployment
 
@@ -111,6 +125,19 @@ messages are rejected as `unknown_device`.
 | CloudFront origin header  | Change the `OriginVerify` construct's id and redeploy the CommandCenter stack: CloudFront and the listener switch together.                                                                                        |
 | Pipeline client secret    | Regenerate it in Keycloak (Clients → telemetry-pipeline → Credentials), copy it to `PipelineClientSecret`, force a new ingest deployment. Deliveries in between are retried.                                       |
 | Keycloak bootstrap admin  | Not rotated: deleted after named administrators exist.                                                                                                                                                             |
+
+## Refresh the RDS CA bundle
+
+The three images (`images/*/Dockerfile`) download AWS's RDS certificate bundle and check it against
+a SHA-256, so a changed or tampered file stops the build. AWS republishes the bundle when it adds
+authorities, so a failing `ADD --checksum` (in CI's `image-layers` job or in a deploy) is expected
+from time to time and is not by itself an incident. To refresh:
+
+1. Download `https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem` and read what
+   changed against the previous bundle (new authorities are normal; removed ones need a reason).
+2. Compute `sha256sum global-bundle.pem` and put the same `sha256:<hash>` in all three Dockerfiles.
+3. Let CI run, then deploy so new tasks carry the new bundle. Running tasks keep the bundle they
+   started with, so do this before RDS moves the instance to a certificate the old bundle lacks.
 
 ## Where to look
 

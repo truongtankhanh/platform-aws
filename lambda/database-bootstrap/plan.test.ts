@@ -55,6 +55,11 @@ describe('database bootstrap plan', () => {
 
 // Runs against a real PostgreSQL when one is provided (CI starts one); skipped otherwise.
 const url = process.env.TEST_DATABASE_URL;
+// The skip is for a laptop without a database. In CI it would turn the proof that one system cannot
+// open another's database into a green run that never ran, so there a missing URL fails.
+it.runIf(Boolean(process.env.CI) && !url)('has a database to test against in CI', () => {
+  expect.fail('TEST_DATABASE_URL is not set in CI: the database isolation test would be skipped');
+});
 describe.skipIf(!url)('database bootstrap against PostgreSQL', () => {
   it('creates isolated databases, applies twice without error, and rotates passwords', async () => {
     const admin = new pg.Client({ connectionString: url });

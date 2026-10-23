@@ -22,7 +22,7 @@ ADRs and was never observed on a live account, it says so.
 
 ## 2. Set up and check your work
 
-Node 22 or newer (`engines`); CI uses 24 and the Lambdas run on `NODEJS_24_X`.
+Node 22 or newer (`engines`); CI reads `.nvmrc` (24) and the Lambdas run on `NODEJS_24_X`.
 
 | Command                    | What it does                                                  |
 | -------------------------- | ------------------------------------------------------------- |
@@ -34,8 +34,12 @@ Node 22 or newer (`engines`); CI uses 24 and the Lambdas run on `NODEJS_24_X`.
 | `npm run synth`            | Staging, with cdk-nag                                         |
 | `npm run synth:production` | Production with `config/site.example.json` (fictional values) |
 
-CI (`.github/workflows/ci.yml`) runs all of the above plus a job that builds the Keycloak image from
-OCC's current realm. That is the definition of green.
+CI (`.github/workflows/ci.yml`) runs all of the above plus four more jobs: `workflows` (actionlint
+and shellcheck), `image-layers` (the OCC API and ingest layers build on a plain Node base),
+`keycloak-image` (builds the Keycloak image from OCC's current realm; advisory, because a red result
+means the other repository moved) and `audit` (`npm audit --audit-level=high`, only on the weekly
+schedule and by hand). Dependabot opens weekly pull requests for npm packages and actions. The
+required check is `verify`; the rest report.
 
 Things to know before running them:
 
@@ -44,7 +48,8 @@ Things to know before running them:
   leave watchers running.
 - The PostgreSQL integration test (`lambda/database-bootstrap/plan.test.ts`) is **skipped** unless
   `TEST_DATABASE_URL` is set. A green local run without it does not cover the isolation guarantee
-  (one system cannot open another's database). CI sets it from a `postgres:17` service.
+  (one system cannot open another's database). CI sets it from a `postgres:17` service, and when `CI`
+  is set a missing URL fails the run instead of skipping.
 - `images/keycloak/occ-realm.json` is git-ignored and generated. To build the Keycloak image locally,
   run `scripts/prepare-realm.sh <occ-repo>/docker/keycloak/occ-realm.json` first.
 
@@ -156,7 +161,7 @@ same change, or CI fails.
 Mirror `TelemetryStack`: task definition, secrets from Secrets Manager, a log group with the stage's
 retention, `MetricsSidecar` if it exposes Prometheus metrics, its own security group, the database
 rule, Service Connect, `circuitBreaker: { rollback: true }`, autoscaling. Then: add the image name
-to `IMAGES` in `registry.ts`; add a build and push step in `deploy.yml`; extend the `ECS2` and
+to `IMAGES` in `registry.ts`; add the build to the `build` job and the image to the `docker save` and the push loop of the `deploy` job in `deploy.yml`; extend the `ECS2` and
 `IAM5` entries in `lib/nag.ts`, whose paths list `KeycloakTask|ApiTask|IngestTask` explicitly;
 add tests for what is exposed and to whom.
 
@@ -170,13 +175,14 @@ the GitHub environments in the runbook. Stage names appear in stack names
 
 ### Upgrade a pinned component
 
-| Component      | Where                                                             | Care                                                                        |
-| -------------- | ----------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| PostgreSQL     | `VER_17_9`, **twice** in `data.ts` (parameter group and instance) | Change both                                                                 |
-| Keycloak       | `ARG KEYCLOAK_VERSION` in `images/keycloak/Dockerfile`            | Minor upgrade is deliberate (ADR-0006); re-test realm import and the issuer |
-| ADOT collector | `ADOT_COLLECTOR_IMAGE` in `metrics-sidecar.ts`                    | Config format changes between releases                                      |
-| CDK / cdk-nag  | `package.json`                                                    | Generated shapes can break assertions; fix the assertion, not the stack     |
-| Lambda runtime | `NODEJS_24_X` in two constructs                                   | Bundling banner and `NODE_EXTRA_CA_CERTS` path assume the managed runtime   |
+| Component      | Where                                                               | Care                                                                        |
+| -------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| PostgreSQL     | `VER_17_9`, **twice** in `data.ts` (parameter group and instance)   | Change both                                                                 |
+| Keycloak       | `ARG KEYCLOAK_IMAGE` (tag **and** digest) in `images/keycloak/`     | Minor upgrade is deliberate (ADR-0006); re-test realm import and the issuer |
+| ADOT collector | `ADOT_COLLECTOR_IMAGE` (tag **and** digest) in `metrics-sidecar.ts` | Config format changes between releases; take the multi-arch index digest    |
+| RDS CA bundle  | `ADD --checksum=…` in the three `images/*/Dockerfile`               | See "Refresh the RDS CA bundle" in the runbook                              |
+| CDK / cdk-nag  | `package.json`                                                      | Generated shapes can break assertions; fix the assertion, not the stack     |
+| Lambda runtime | `NODEJS_24_X` in two constructs                                     | Bundling banner and `NODE_EXTRA_CA_CERTS` path assume the managed runtime   |
 
 ### Add an environment variable to a service
 
@@ -248,16 +254,24 @@ Ordered by how much I would worry. None is fixed here; each is a candidate ticke
 2. **Keycloak is a single task** with a local cache. A release means about a minute without
    sign-in and a task failure means no sign-in until it restarts. This is a documented trade-off
    (ADR-0006). The `KeycloakDown` alarm now reports it after five minutes without a task.
-3. **The `X-Origin-Verify` value is not hidden from AWS readers.** The template holds only a
+3. **The `X-Origin-Verify` value is not hidden from AWS readers (accepted, ADR-0009).** The template holds only a
    Secrets Manager dynamic reference (a test asserts that), but CloudFormation resolves it and the
    plaintext is stored in the CloudFront origin custom header and the ALB listener rules. Anyone
-   with describe permissions on those can read it. It is the second layer after the prefix list.
+   with describe permissions on those can read it. It is the second layer after the prefix list;
+   if it leaks, the rate limits stop being reliable and nothing that needs an identity opens. Keep
+   those describe permissions narrow.
 4. **The deploy workflow applies everything unreviewed.** `cdk deploy --all --require-approval never`
    means IAM and security-group changes are not paused for confirmation. The only gate is the
    required reviewers on the `production` GitHub environment, which is configured outside this
-   repository.
-5. **Floating inputs.** `occ_ref` and `itp_ref` default to `main`; the Keycloak base image is a
-   minor tag, not a digest; and the RDS CA bundle is fetched with `ADD <url>` without a checksum.
+   repository. What changed: the code of the other two repositories is now built in a separate
+   `build` job with no AWS access, so a malicious dependency there cannot read the deploy role's
+   token. The `deploy` job still pushes what that job built and uploads its console files into
+   AWS, so a compromised build can still ship a bad release; it just cannot reach the account
+   directly. The workflow's new final check does not roll anything back.
+5. **Floating inputs (mostly closed).** `occ_ref` and `itp_ref` are now required with no default; the
+   Keycloak and ADOT images are pinned by digest; the RDS CA bundle is checked against a SHA-256 and
+   GitHub Actions are pinned by commit SHA (Dependabot keeps them current). What remains is that a
+   ref may still be a branch name, which builds whatever it points to at that moment.
    (The image tag itself is now safe: the repositories are immutable, the tag carries the attempt
    number, and a stage has the tag `unset-pass-imageTag` until a deploy names one, so a manual
    `cdk deploy` without `-c imageTag=…` fails to pull and rolls back, with a name that says why.)

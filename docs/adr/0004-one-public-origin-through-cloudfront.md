@@ -29,7 +29,8 @@ Option 3.
 - The load balancer accepts traffic only from CloudFront's origin-facing prefix list, looked up at
   deploy time. That list admits every CloudFront distribution, so CloudFront also sends a secret
   `X-Origin-Verify` header (from Secrets Manager, resolved at deploy time) and the listener
-  forwards nothing without it.
+  forwards nothing without it. The value ends up readable from the two services' configuration,
+  which is accepted (ADR-0009).
 - The listener forwards an allowlist, not a blocklist: `/api/*`, `/socket.io/*`, and from
   Keycloak only `/auth/realms/occ/*`, `/auth/resources/*` and `/auth/js/*`. The admin console and
   the master realm fall through to 404. Keycloak normalises paths and the load balancer does not,

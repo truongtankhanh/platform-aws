@@ -19,7 +19,7 @@ Details: `CONTEXT-SCAN.md` (full scan), `docs/architecture.md`, `docs/adr/`, `do
 
 | Command                    | Purpose                                                                |
 | -------------------------- | ---------------------------------------------------------------------- |
-| `npm ci`                   | Install (Node >= 22; CI uses 24)                                       |
+| `npm ci`                   | Install (Node >= 22; CI uses 24 from `.nvmrc`)                         |
 | `npm run lint`             | ESLint                                                                 |
 | `npm run typecheck`        | `tsc --noEmit` (`npm run build` is the same; there is no build output) |
 | `npm run format:check`     | Prettier; CI fails on unformatted Markdown too                         |
@@ -29,7 +29,7 @@ Details: `CONTEXT-SCAN.md` (full scan), `docs/architecture.md`, `docs/adr/`, `do
 
 `npm test` and the synth commands synthesise both stages and bundle the Lambdas with esbuild; they are heavy. The
 PostgreSQL integration test in `lambda/database-bootstrap/plan.test.ts` runs only when `TEST_DATABASE_URL` is set
-(CI sets it); without it, it is skipped.
+(CI sets it); without it, it is skipped locally, and fails when `CI` is set.
 
 ## Stack in one paragraph
 
