@@ -29,7 +29,7 @@ Abbreviations: **OCC** = `ops-command-center`, **ITP** = `iot-telemetry-pipeline
 
 |               | OCC                                                                                                                | ITP                                                                                                        |
 | ------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
-| Compose file  | `docker-compose.yml`                                                                                               | `docker-compose.yml`                                                                                       |
+| Compose file  | `docker/docker-compose.yml`                                                                                        | `docker-compose.yml`                                                                                       |
 | PostgreSQL    | 17, host `:15432`, database `ops`, superuser `postgres`                                                            | 17, host `:5433`, database `telemetry`, superuser `postgres`; `telemetry_test` added by `scripts/stack.sh` |
 | Identity      | Keycloak 26.8 `start-dev --import-realm`, host `:18081`, realm `occ` with 5 demo users                             | none                                                                                                       |
 | Broker        | Mosquitto **2.1**, profile `telemetry`, no host port, accounts and ACL generated at start, `allow_anonymous false` | Mosquitto **2.0.22**, host `:1883`, `allow_anonymous true`, `max_queued_messages 200000`                   |
@@ -125,12 +125,12 @@ verify its AWS IoT Core path), `cameras` (a MediaMTX relay, to exercise `CAMERA_
 
 ### 4.3 How the two projects are composed
 
-| Option                                                          | Verdict                                                                                                                                                                              |
-| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Compose `include` of both repositories' files                   | **Rejected.** Both define `postgres`, `mosquitto`, `prometheus` and `grafana`; duplicate service names are an error, and renaming them means editing the other repositories.         |
-| Extend one repository's Compose to include the other's services | Rejected. Makes one service repository own the platform and breaks G4 symmetry.                                                                                                      |
-| **A separate Compose that builds from sibling checkouts**       | **Chosen.** Build contexts come from `OCC_DIR` and `ITP_DIR` (default `../ops-command-center`, `../iot-telemetry-pipeline`). The realm file is mounted from `OCC_DIR/ops/keycloak/`. |
-| Kubernetes (`kind`) using ITP's `deploy/k8s/overlays/local`     | Not for the default path: heavier, and OCC has no manifests. Remains available to ITP.                                                                                               |
+| Option                                                          | Verdict                                                                                                                                                                                 |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Compose `include` of both repositories' files                   | **Rejected.** Both define `postgres`, `mosquitto`, `prometheus` and `grafana`; duplicate service names are an error, and renaming them means editing the other repositories.            |
+| Extend one repository's Compose to include the other's services | Rejected. Makes one service repository own the platform and breaks G4 symmetry.                                                                                                         |
+| **A separate Compose that builds from sibling checkouts**       | **Chosen.** Build contexts come from `OCC_DIR` and `ITP_DIR` (default `../ops-command-center`, `../iot-telemetry-pipeline`). The realm file is mounted from `OCC_DIR/docker/keycloak/`. |
+| Kubernetes (`kind`) using ITP's `deploy/k8s/overlays/local`     | Not for the default path: heavier, and OCC has no manifests. Remains available to ITP.                                                                                                  |
 
 ### 4.4 Database
 
@@ -153,7 +153,7 @@ must never share the `telemetry` database with that suite (see Q2).
 - This is a hypothesis, not a fact: it is exactly the behaviour `platform-aws` ADR-0006 marks "not
   yet observed". The first spike (section 6) proves or disproves it, and the result goes back
   into that ADR.
-- The realm is OCC's own `ops/keycloak/occ-realm.json`, unmodified. Locally the demo secret of
+- The realm is OCC's own `docker/keycloak/occ-realm.json`, unmodified. Locally the demo secret of
   `telemetry-pipeline` (`occ-demo-telemetry-pipeline`) is known, so no manual copy is needed. This
   is a deliberate difference from AWS, where `scripts/prepare-realm.sh` strips users and secrets;
   `doctor` flags it so nobody mistakes the local realm for the AWS one.
@@ -221,11 +221,11 @@ The same script is what CI calls, so the documented path and the tested path are
 
 ## 5. Impact on the existing repositories
 
-| Repository               | Change                                                                                                                                  |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `ops-command-center`     | None required. Optional: a line in its README pointing at `platform-local`; keep the realm path `ops/keycloak/occ-realm.json` stable.   |
-| `iot-telemetry-pipeline` | None required. Optional: replace the "Manual integration check" with a link; its `development.md` table gains `platform-local`.         |
-| `platform-aws`           | None required. `docs/handover.md` should list `platform-local` as a consumer of its values; consider emitting a manifest (section 4.8). |
+| Repository               | Change                                                                                                                                   |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `ops-command-center`     | None required. Optional: a line in its README pointing at `platform-local`; keep the realm path `docker/keycloak/occ-realm.json` stable. |
+| `iot-telemetry-pipeline` | None required. Optional: replace the "Manual integration check" with a link; its `development.md` table gains `platform-local`.          |
+| `platform-aws`           | None required. `docs/handover.md` should list `platform-local` as a consumer of its values; consider emitting a manifest (section 4.8).  |
 
 ## 6. Rollout
 
@@ -275,10 +275,10 @@ The same script is what CI calls, so the documented path and the tested path are
 
 ## 10. Source facts
 
-Checked in the three repositories on 2026-10-21; re-check before relying on any of them.
+Checked in the three repositories on 2026-10-21; OCC paths re-checked on 2026-10-23 after its commit `5d895df` moved the Docker files into `docker/`. Re-check before relying on any of them.
 
-- OCC `docker-compose.yml` (services, ports, profiles, `OIDC_*`), `apps/api/.env.example`
-  (`OIDC_ISSUER` on `:15173`), `ops/mosquitto/mosquitto.conf`, `ops/keycloak/occ-realm.json`
+- OCC `docker/docker-compose.yml` (services, ports, profiles, `OIDC_*`), `apps/api/.env.example`
+  (`OIDC_ISSUER` on `:15173`), `docker/mosquitto/mosquitto.conf`, `docker/keycloak/occ-realm.json`
   (clients `occ-console` and `telemetry-pipeline`; roles `operator`, `supervisor`, `technician`,
   `viewer`; 5 users), `package.json` (`docker:up` = postgres and keycloak).
 - ITP `docker-compose.yml`, `.env.example`, `scripts/stack.sh`, `deploy/mosquitto/mosquitto.conf`,

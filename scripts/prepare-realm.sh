@@ -9,7 +9,7 @@
 #     while the API fetches signing keys over Service Connect from a private address.
 # Clients, roles and the audience mapper are kept exactly as the console and API expect them.
 set -euo pipefail
-source_realm="${1:?usage: prepare-realm.sh <ops-command-center>/ops/keycloak/occ-realm.json [out]}"
+source_realm="${1:?usage: prepare-realm.sh <ops-command-center>/docker/keycloak/occ-realm.json [out]}"
 out="${2:-images/keycloak/occ-realm.json}"
 jq '
   .users = ((.users // []) | map(select(.serviceAccountClientId != null)))

@@ -59,7 +59,7 @@ jobs:
         with:
           repository: truongtankhanh/ops-command-center
           path: occ
-      - run: scripts/prepare-realm.sh occ/ops/keycloak/occ-realm.json
+      - run: scripts/prepare-realm.sh occ/docker/keycloak/occ-realm.json
       - run: docker build -t platform-keycloak:ci images/keycloak
       - name: The realm has no demo users and no demo secrets
         run: |

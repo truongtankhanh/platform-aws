@@ -85,11 +85,11 @@ jobs:
           TAG: ${{ steps.context.outputs.tag }}
         run: |
           repo() { echo "$REGISTRY/platform-$STAGE/$1:$TAG"; }
-          docker build -f occ/apps/api/Dockerfile -t occ-api-base occ
+          docker build -f occ/docker/api/Dockerfile -t occ-api-base occ
           docker build --build-arg BASE_IMAGE=occ-api-base -t "$(repo occ-api)" images/occ-api
           docker build -f itp/apps/ingest/Dockerfile -t ingest-base itp
           docker build --build-arg BASE_IMAGE=ingest-base -t "$(repo ingest)" images/ingest
-          scripts/prepare-realm.sh occ/ops/keycloak/occ-realm.json
+          scripts/prepare-realm.sh occ/docker/keycloak/occ-realm.json
           docker build -t "$(repo keycloak)" images/keycloak
           for image in occ-api ingest keycloak; do docker push "$(repo "$image")"; done
 

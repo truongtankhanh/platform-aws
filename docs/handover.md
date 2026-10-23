@@ -46,7 +46,7 @@ Things to know before running them:
   `TEST_DATABASE_URL` is set. A green local run without it does not cover the isolation guarantee
   (one system cannot open another's database). CI sets it from a `postgres:17` service.
 - `images/keycloak/occ-realm.json` is git-ignored and generated. To build the Keycloak image locally,
-  run `scripts/prepare-realm.sh <occ-repo>/ops/keycloak/occ-realm.json` first.
+  run `scripts/prepare-realm.sh <occ-repo>/docker/keycloak/occ-realm.json` first.
 
 ## 3. How the code is organised
 
@@ -105,7 +105,7 @@ synth.
 | Service Connect names `keycloak`, `occ-api`, and ports 8080 / 3000              | `command-center.ts`; **literals repeated** in `telemetry.ts` | Alert delivery or JWKS fetch fails                                                 |
 | Topic `campus/+/+/telemetry`, share group `ingest`, client prefix `ingest`      | consts in `telemetry.ts`; ITP ADR-0001                       | Ingest receives nothing or is refused                                              |
 | Device policy topic `campus/<zone>/<thing>/telemetry`                           | `telemetry.ts`                                               | Devices cannot publish                                                             |
-| Realm contents: clients `occ-console`, `telemetry-pipeline`, audience `occ-api` | OCC repo (`ops/keycloak/occ-realm.json`)                     | Sign-in or alert delivery breaks; `prepare-realm.sh` only strips users and secrets |
+| Realm contents: clients `occ-console`, `telemetry-pipeline`, audience `occ-api` | OCC repo (`docker/keycloak/occ-realm.json`)                  | Sign-in or alert delivery breaks; `prepare-realm.sh` only strips users and secrets |
 | Ingest `minHealthyPercent: 100`; Keycloak `0 / 100`                             | `telemetry.ts`, `command-center.ts`                          | Dropped QoS 1 messages during deploys; two Keycloak nodes with separate caches     |
 | ECR name `platform-<stage>/<image>` and tag `<occ>-<itp>-<run>`                 | `registry.ts`, `deploy.yml`                                  | Tasks cannot pull their image                                                      |
 | Region `ap-southeast-1`; CloudFront certificate in `us-east-1`                  | `config.ts`, `deploy.yml`, `site.json`                       | Synth or deploy refuses                                                            |
@@ -252,9 +252,11 @@ Ordered by how much I would worry. None is fixed here; each is a candidate ticke
    `imageTag` in `config.ts` defaults to `latest`, which the workflow never pushes, so a manual
    `cdk deploy` without `-c imageTag=…` points tasks at an image that does not exist.
 6. **Coupling to the other two repositories.** CI checks out OCC `main` and reads
-   `ops/keycloak/occ-realm.json`; `deploy.yml` assumes `apps/api/Dockerfile`,
+   `docker/keycloak/occ-realm.json`; `deploy.yml` assumes `docker/api/Dockerfile`,
    `apps/ingest/Dockerfile` and `pnpm --filter @occ/console`. A refactor upstream breaks CI or
-   deploy here with no change in this repository.
+   deploy here with no change in this repository, and it has happened: OCC moved its Docker files
+   into `docker/` on 2026-10-22, which broke the `keycloak-image` job and the Deploy workflow
+   until the paths here were updated.
 7. **Manual steps that fail quietly.** The pipeline client secret copy, the alarm e-mail
    confirmation, deleting the Keycloak bootstrap administrator, and system-password rotation
    (`loginGeneration` plus a restart) all depend on a person remembering.
