@@ -3,3 +3,10 @@ cdk.out/
 .DS_Store
 *.tsbuildinfo
 images/keycloak/occ-realm.json
+
+# Local-only output of the scan/plan/apply/verify commands and the improvement tracker.
+docs/quality/
+docs/deps/
+docs/review/
+docs/ci/
+CONTEXT-SCAN.md
