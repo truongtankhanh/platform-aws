@@ -93,37 +93,33 @@ export class DataStack extends Stack {
       generation: db.loginGeneration,
     });
 
-    const alarm = (
-      id: string,
-      metric: cloudwatch.Metric,
-      threshold: number,
-      comparison: cloudwatch.ComparisonOperator,
-      description: string,
-    ) =>
-      props.alarms.watch(
-        new cloudwatch.Alarm(this, id, {
-          metric,
-          threshold,
-          comparisonOperator: comparison,
-          evaluationPeriods: 3,
-          alarmDescription: description,
-          treatMissingData: cloudwatch.TreatMissingData.BREACHING,
-        }),
-      );
-    alarm(
-      'CpuHigh',
-      this.instance.metricCPUUtilization({ period: Duration.minutes(5) }),
-      80,
-      cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-      'Database CPU above 80% for 15 minutes',
-    );
-    alarm(
-      'StorageLow',
-      this.instance.metricFreeStorageSpace({ period: Duration.minutes(5) }),
-      // Bytes. Autoscaling storage grows before this, unless it has reached its maximum.
-      0.1 * db.maxAllocatedStorageGiB * 1024 ** 3,
-      cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
-      'Less than 10% of the maximum storage left',
-    );
+    // Three periods of five minutes. A gap in the data is "breaching": an instance that reports
+    // nothing is not healthy.
+    const sustained = {
+      evaluationPeriods: 3,
+      treatMissingData: cloudwatch.TreatMissingData.BREACHING,
+    };
+    props.alarms.alarm(this, 'CpuHigh', {
+      ...sustained,
+      metric: this.instance.metricCPUUtilization({ period: Duration.minutes(5) }),
+      threshold: 80,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      alarmDescription: 'Database CPU above 80% for 15 minutes',
+    });
+    // FreeStorageSpace is the free space of the volume as it is now, and RDS publishes no metric for
+    // how big that volume currently is, so "used more than X% of the maximum" cannot be computed.
+    // What can be seen is the failure that matters: autoscaling grows the volume when free space
+    // drops to 10% of it, so free space staying under 10% of the *initial* size for a quarter of
+    // an hour means autoscaling is not keeping up (its cooldown, or the maximum was reached).
+    // Comparing with the maximum instead fires while the first volume is still mostly empty.
+    props.alarms.alarm(this, 'StorageLow', {
+      ...sustained,
+      metric: this.instance.metricFreeStorageSpace({ period: Duration.minutes(5) }),
+      // Bytes.
+      threshold: (db.allocatedStorageGiB / 10) * 1024 ** 3,
+      comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+      alarmDescription:
+        'Free storage under 10% of the initial volume for 15 minutes: storage autoscaling is not keeping up, or has reached its maximum',
+    });
   }
 }

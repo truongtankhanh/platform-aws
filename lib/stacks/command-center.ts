@@ -18,6 +18,7 @@ import { CloudFrontOriginPrefixList } from '../constructs/cloudfront-prefix-list
 import { MetricsSidecar } from '../constructs/metrics-sidecar.js';
 import { allowDatabaseAccess } from '../database-access.js';
 import { logGroup, logPolicy } from '../retention.js';
+import { runningTaskCount } from '../service-metrics.js';
 
 export interface CommandCenterStackProps extends StackProps {
   config: StageConfig;
@@ -493,42 +494,47 @@ export class CommandCenterStack extends Stack {
 
     // ---------------------------------------------------------------- alarms
 
-    const watch = (
-      id: string,
-      metric: cloudwatch.IMetric,
-      threshold: number,
-      description: string,
-    ) =>
-      props.alarms.watch(
-        new cloudwatch.Alarm(this, id, {
-          metric,
-          threshold,
-          evaluationPeriods: 3,
-          comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
-          treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
-          alarmDescription: description,
-        }),
-      );
-    watch(
-      'Api5xx',
-      apiTargets.metrics.httpCodeTarget(elbv2.HttpCodeTarget.TARGET_5XX_COUNT, {
+    // Three minutes over a threshold. Without traffic these metrics have no data, which is fine.
+    const sustained = {
+      evaluationPeriods: 3,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    };
+    props.alarms.alarm(this, 'Api5xx', {
+      ...sustained,
+      metric: apiTargets.metrics.httpCodeTarget(elbv2.HttpCodeTarget.TARGET_5XX_COUNT, {
         period: Duration.minutes(1),
       }),
-      10,
-      'The API answered 10 or more 5xx a minute for 3 minutes',
-    );
-    watch(
-      'ApiUnhealthy',
-      apiTargets.metrics.unhealthyHostCount({ period: Duration.minutes(1) }),
-      1,
-      'An API replica has been failing readiness for 3 minutes',
-    );
-    watch(
-      'ApiLatency',
-      apiTargets.metrics.targetResponseTime({ period: Duration.minutes(1), statistic: 'p95' }),
-      1,
-      'API p95 response time above 1 s for 3 minutes',
-    );
+      threshold: 10,
+      alarmDescription: 'The API answered 10 or more 5xx a minute for 3 minutes',
+    });
+    props.alarms.alarm(this, 'ApiUnhealthy', {
+      ...sustained,
+      metric: apiTargets.metrics.unhealthyHostCount({ period: Duration.minutes(1) }),
+      threshold: 1,
+      alarmDescription: 'An API replica has been failing readiness for 3 minutes',
+    });
+    props.alarms.alarm(this, 'ApiLatency', {
+      ...sustained,
+      metric: apiTargets.metrics.targetResponseTime({
+        period: Duration.minutes(1),
+        statistic: 'p95',
+      }),
+      threshold: 1,
+      alarmDescription: 'API p95 response time above 1 s for 3 minutes',
+    });
+    // Keycloak is a single task (docs/adr/0006), so a task that is gone is a sign-in outage. A
+    // release stops the old task before it starts the new one and takes about a minute, so the
+    // window is five minutes: shorter would alarm on every deploy. No data means no task.
+    props.alarms.alarm(this, 'KeycloakDown', {
+      metric: runningTaskCount(props.cluster, keycloak),
+      threshold: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+      evaluationPeriods: 5,
+      treatMissingData: cloudwatch.TreatMissingData.BREACHING,
+      alarmDescription:
+        'Keycloak has had no running task for 5 minutes: nobody can sign in, and tokens cannot be renewed',
+    });
 
     new CfnOutput(this, 'PublicUrl', { value: this.publicUrl });
     new CfnOutput(this, 'DistributionDomainName', {

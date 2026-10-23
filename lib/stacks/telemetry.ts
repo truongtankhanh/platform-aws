@@ -14,6 +14,7 @@ import { IotClientCertificate } from '../constructs/iot-client-certificate.js';
 import { MetricsSidecar } from '../constructs/metrics-sidecar.js';
 import { allowDatabaseAccess } from '../database-access.js';
 import { logGroup, logPolicy } from '../retention.js';
+import { runningTaskCount } from '../service-metrics.js';
 
 export interface TelemetryStackProps extends StackProps {
   config: StageConfig;
@@ -239,39 +240,47 @@ export class TelemetryStack extends Stack {
     // ---------------------------------------------------------------- alarms
 
     // Any lost message is worth a look: the pipeline's completeness is measured, not assumed.
-    props.alarms.watch(
-      new cloudwatch.Alarm(this, 'SequenceGaps', {
+    props.alarms.alarm(this, 'SequenceGaps', {
+      metric: new cloudwatch.Metric({
+        namespace: 'Platform/Telemetry',
+        metricName: 'telemetry_sequence_gaps_total',
+        statistic: 'Sum',
+        period: Duration.minutes(5),
+      }),
+      threshold: 0,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      evaluationPeriods: 1,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      alarmDescription:
+        'Devices reported sequence gaps: messages were lost between device and database',
+    });
+    // The service itself, not only what it reports: a dead ingest also stops its own metrics, so
+    // the alarms above and below cannot tell "no messages" from "nobody listening". Deploys keep
+    // the running count at the minimum or above (minimum healthy 100%), and autoscaling never goes
+    // below it. No data means no task.
+    props.alarms.alarm(this, 'IngestTasksLow', {
+      metric: runningTaskCount(props.cluster, service),
+      threshold: ingest.minTasks,
+      comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+      evaluationPeriods: 5,
+      treatMissingData: cloudwatch.TreatMissingData.BREACHING,
+      alarmDescription: `Fewer than ${ingest.minTasks} ingest task(s) running for 5 minutes: telemetry is not consumed at full capacity`,
+    });
+    // Only where devices are expected: a demo stage has none, and would alarm for ever.
+    if (config.site) {
+      props.alarms.alarm(this, 'NoReadings', {
         metric: new cloudwatch.Metric({
           namespace: 'Platform/Telemetry',
-          metricName: 'telemetry_sequence_gaps_total',
+          metricName: 'telemetry_readings_total',
           statistic: 'Sum',
           period: Duration.minutes(5),
         }),
-        threshold: 0,
-        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-        evaluationPeriods: 1,
-        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
-        alarmDescription:
-          'Devices reported sequence gaps: messages were lost between device and database',
-      }),
-    );
-    // Only where devices are expected: a demo stage has none, and would alarm for ever.
-    if (config.site) {
-      props.alarms.watch(
-        new cloudwatch.Alarm(this, 'NoReadings', {
-          metric: new cloudwatch.Metric({
-            namespace: 'Platform/Telemetry',
-            metricName: 'telemetry_readings_total',
-            statistic: 'Sum',
-            period: Duration.minutes(5),
-          }),
-          threshold: 1,
-          comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
-          evaluationPeriods: 3,
-          treatMissingData: cloudwatch.TreatMissingData.BREACHING,
-          alarmDescription: 'No readings stored for 15 minutes',
-        }),
-      );
+        threshold: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+        evaluationPeriods: 3,
+        treatMissingData: cloudwatch.TreatMissingData.BREACHING,
+        alarmDescription: 'No readings stored for 15 minutes',
+      });
     }
   }
 }

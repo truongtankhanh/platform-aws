@@ -218,27 +218,29 @@ these, which the ADRs list as designed but never observed. Update the ADRs when 
 Alarms all notify one SNS topic per stage; confirm the e-mail subscription after deploy. The
 symptom-to-first-check table is in the runbook.
 
-| Alarm                                  | Stack         | Meaning                                                                                              |
-| -------------------------------------- | ------------- | ---------------------------------------------------------------------------------------------------- |
-| `Api5xx`, `ApiUnhealthy`, `ApiLatency` | CommandCenter | API errors, a replica failing readiness, p95 above 1 s                                               |
-| `CpuHigh`, `StorageLow`                | Data          | DB CPU above 80 % for 15 min; under 10 % of max storage left                                         |
-| `SequenceGaps`                         | Telemetry     | Devices reported lost messages                                                                       |
-| `NoReadings`                           | Telemetry     | No readings for 15 min. Only when a site is configured. It also fires if the metrics collector stops |
+| Alarm                                  | Stack         | Meaning                                                                                                                               |
+| -------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `Api5xx`, `ApiUnhealthy`, `ApiLatency` | CommandCenter | API errors, a replica failing readiness, p95 above 1 s                                                                                |
+| `KeycloakDown`                         | CommandCenter | No running Keycloak task for 5 min (a release takes about a minute, so it does not alarm)                                             |
+| `CpuHigh`, `StorageLow`                | Data          | DB CPU above 80 % for 15 min; free storage under 10 % of the initial volume for 15 min (autoscaling not keeping up or at its maximum) |
+| `SequenceGaps`                         | Telemetry     | Devices reported lost messages                                                                                                        |
+| `IngestTasksLow`                       | Telemetry     | Fewer ingest tasks running than the stage's minimum for 5 min                                                                         |
+| `NoReadings`                           | Telemetry     | No readings for 15 min. Only when a site is configured. It also fires if the metrics collector stops                                  |
 
-**There is no alarm for Keycloak availability or for ingest task health.** `NoReadings` is the only
-signal that ingest stopped, and it does not exist in a stage without a site.
+Task counts come from Container Insights (enabled on the cluster) and treat missing data as
+breaching, because a service with no task can stop reporting. There is still no alarm on the API's
+running task count (`ApiUnhealthy` needs targets to exist) or on CPU or memory of the services.
 
 ## 8. Known risks and gaps
 
 Ordered by how much I would worry. None is fixed here; each is a candidate ticket.
 
-1. **Production teardown loses logs.** `CommandCenterStack` uses `RemovalPolicy.DESTROY` with
-   `autoDeleteObjects` for the access-log and console buckets and `DESTROY` for log groups in every
-   stage, and the Telemetry and Network log groups likewise. RDS and ECR are protected; the access
-   logs (CloudFront, ALB, S3) are not. Decide whether production should retain them.
+1. **Resolved (ADR-0007): production teardown used to lose logs.** Production now keeps its log
+   groups and the access-log bucket when a stack is deleted (`observability.retainLogs`); they
+   have to be deleted by hand afterwards. Demo stages still remove them.
 2. **Keycloak is a single task** with a local cache. A release means about a minute without
-   sign-in, a task failure means no sign-in until it restarts, and nothing alarms on it. This is a
-   documented trade-off (ADR-0006); the alarm is the cheap part to add.
+   sign-in and a task failure means no sign-in until it restarts. This is a documented trade-off
+   (ADR-0006). The `KeycloakDown` alarm now reports it after five minutes without a task.
 3. **The `X-Origin-Verify` value is not hidden from AWS readers.** The template holds only a
    Secrets Manager dynamic reference (a test asserts that), but CloudFormation resolves it and the
    plaintext is stored in the CloudFront origin custom header and the ALB listener rules. Anyone

@@ -29,8 +29,10 @@ Option 3, as one construct (`MetricsSidecar`) used by both services.
 - Only declared metrics become CloudWatch metrics, with bounded dimensions (`env`, `route`,
   `status_code`, `result`, `reason`); every sample remains queryable in the collector's log group.
 - Alarms: API 5xx, unhealthy replicas and p95 latency from the load balancer; database CPU and
-  storage; any telemetry sequence gap; no readings stored for 15 minutes. All notify one topic per
-  stage.
+  storage; any telemetry sequence gap; no readings stored for 15 minutes; and, from Container
+  Insights rather than from the collector, too few running tasks for Keycloak and for the ingest
+  service (a dead service also stops its own metrics, so the alarms above cannot tell it from
+  silence). All notify one topic per stage.
 
 ## Consequences
 

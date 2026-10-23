@@ -7,6 +7,7 @@ import { logPolicy, retention } from '../lib/retention.js';
 import {
   containers,
   environmentOf,
+  exampleSite,
   flatten,
   secretNamesOf,
   synth,
@@ -106,6 +107,83 @@ describe('logs', () => {
         x.template('commandCenter').findResources('AWS::S3::Bucket'),
       ).find(([id]) => id.startsWith('Console'))!;
       expect(console).toMatchObject({ DeletionPolicy: 'Delete' });
+    }
+  });
+});
+
+describe('alarms', () => {
+  const stacks = ['data', 'commandCenter', 'telemetry'] as const;
+
+  it('notifies the stage topic when any alarm fires and when it recovers', () => {
+    for (const x of [staging, production]) {
+      for (const stack of stacks) {
+        const alarms = Object.values(x.template(stack).findResources('AWS::CloudWatch::Alarm'));
+        expect(alarms.length).toBeGreaterThan(0);
+        for (const alarm of alarms) {
+          expect(alarm.Properties.AlarmActions).toHaveLength(1);
+          expect(alarm.Properties.OKActions).toHaveLength(1);
+        }
+      }
+    }
+  });
+
+  it('sends alarms to the site e-mail address in production, and to nobody in the demo stage', () => {
+    const topic = production.template('network');
+    topic.resourceCountIs('AWS::SNS::Subscription', 1);
+    topic.hasResourceProperties('AWS::SNS::Subscription', {
+      Protocol: 'email',
+      Endpoint: exampleSite.alarmEmail,
+    });
+    staging.template('network').resourceCountIs('AWS::SNS::Subscription', 0);
+  });
+
+  it('watches database CPU, and free storage against the volume autoscaling starts from', () => {
+    for (const name of ['staging', 'production'] as const) {
+      const t = (name === 'staging' ? staging : production).template('data');
+      t.hasResourceProperties('AWS::CloudWatch::Alarm', {
+        MetricName: 'CPUUtilization',
+        Threshold: 80,
+        ComparisonOperator: 'GreaterThanThreshold',
+        EvaluationPeriods: 3,
+        TreatMissingData: 'breaching',
+      });
+      // 10% of the initial volume, in bytes. Not of the maximum: the metric is the free space of the
+      // volume as it is now, so a threshold from the maximum fires while the volume is mostly empty.
+      t.hasResourceProperties('AWS::CloudWatch::Alarm', {
+        MetricName: 'FreeStorageSpace',
+        Threshold: (STAGES[name]!.database.allocatedStorageGiB / 10) * 1024 ** 3,
+        ComparisonOperator: 'LessThanThreshold',
+        EvaluationPeriods: 3,
+        TreatMissingData: 'breaching',
+      });
+    }
+  });
+
+  it('raises an alarm when Keycloak or the ingest service has too few tasks running', () => {
+    for (const name of ['staging', 'production'] as const) {
+      const x = name === 'staging' ? staging : production;
+      x.template('commandCenter').hasResourceProperties('AWS::CloudWatch::Alarm', {
+        Namespace: 'ECS/ContainerInsights',
+        MetricName: 'RunningTaskCount',
+        Statistic: 'Minimum',
+        Threshold: 1,
+        ComparisonOperator: 'LessThanThreshold',
+        EvaluationPeriods: 5,
+        // No task, no data: that is the outage, not a reason to stay quiet.
+        TreatMissingData: 'breaching',
+        Dimensions: Match.arrayWith([
+          Match.objectLike({ Name: 'ClusterName' }),
+          Match.objectLike({ Name: 'ServiceName' }),
+        ]),
+      });
+      x.template('telemetry').hasResourceProperties('AWS::CloudWatch::Alarm', {
+        Namespace: 'ECS/ContainerInsights',
+        MetricName: 'RunningTaskCount',
+        Threshold: STAGES[name]!.telemetry.ingest.minTasks,
+        ComparisonOperator: 'LessThanThreshold',
+        EvaluationPeriods: 5,
+        TreatMissingData: 'breaching',
+      });
     }
   });
 });
