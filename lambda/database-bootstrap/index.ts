@@ -1,7 +1,7 @@
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import type { CloudFormationCustomResourceEvent } from 'aws-lambda';
 import pg from 'pg';
-import { describe, plan, type DatabaseSpec } from './plan.js';
+import { plan, summarise, type DatabaseSpec } from './plan.js';
 
 /**
  * Custom resource: creates one database and one owning login per system on the shared RDS
@@ -75,7 +75,7 @@ export async function bootstrap(client: pg.Client, specs: DatabaseSpec[]): Promi
     );
     await client.query(rows[0]!.sql);
   }
-  const log = describe(steps);
+  const log = summarise(steps);
   console.log(JSON.stringify({ message: 'database bootstrap applied', steps: log }));
   return log;
 }

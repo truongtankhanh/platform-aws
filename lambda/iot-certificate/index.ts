@@ -57,7 +57,17 @@ export async function handle(event: CloudFormationCustomResourceEvent, clients: 
 
     case 'Delete': {
       const certificateId = event.PhysicalResourceId;
-      if (!/^[0-9a-f]{64}$/.test(certificateId)) return { PhysicalResourceId: certificateId };
+      if (!/^[0-9a-f]{64}$/.test(certificateId)) {
+        // A create that failed has no certificate id as its physical id, and create() has already
+        // removed whatever it made, so there is nothing of ours to delete.
+        console.warn(
+          JSON.stringify({
+            message: 'delete skipped: the physical id is not a certificate id',
+            physicalResourceId: certificateId,
+          }),
+        );
+        return { PhysicalResourceId: certificateId };
+      }
       const certificateArn = arnOf(certificateId, event.ServiceToken);
       await ignoreMissing(
         clients.iot.send(
@@ -80,19 +90,52 @@ async function create(props: Properties, clients: Clients) {
     new CreateKeysAndCertificateCommand({ setAsActive: true }),
   );
   const { certificateId, certificateArn, certificatePem, keyPair } = created;
-  if (!certificateId || !certificateArn || !certificatePem || !keyPair?.PrivateKey) {
-    throw new Error('CreateKeysAndCertificate returned an incomplete result');
+  // From here the certificate exists and is ACTIVE. A failed create hands CloudFormation no
+  // certificate id, so its rollback cannot delete it: whatever fails next, remove it here.
+  try {
+    if (!certificateId || !certificateArn || !certificatePem || !keyPair?.PrivateKey) {
+      throw new Error('CreateKeysAndCertificate returned an incomplete result');
+    }
+    await clients.secrets.send(
+      new PutSecretValueCommand({
+        SecretId: props.secretArn,
+        SecretString: JSON.stringify({ certificatePem, privateKey: keyPair.PrivateKey }),
+      }),
+    );
+    await clients.iot.send(
+      new AttachPolicyCommand({ policyName: props.policyName, target: certificateArn }),
+    );
+    return response(certificateId, certificateArn);
+  } catch (error) {
+    if (certificateId) await discard(certificateId, clients);
+    throw error;
   }
-  await clients.secrets.send(
-    new PutSecretValueCommand({
-      SecretId: props.secretArn,
-      SecretString: JSON.stringify({ certificatePem, privateKey: keyPair.PrivateKey }),
-    }),
-  );
-  await clients.iot.send(
-    new AttachPolicyCommand({ policyName: props.policyName, target: certificateArn }),
-  );
-  return response(certificateId, certificateArn);
+}
+
+/**
+ * Best effort. The caller needs the error that made the create fail, not one from the cleanup, so a
+ * cleanup that fails is logged (with the id to delete by hand) rather than thrown.
+ */
+async function discard(certificateId: string, clients: Clients): Promise<void> {
+  try {
+    await ignoreMissing(
+      clients.iot.send(new UpdateCertificateCommand({ certificateId, newStatus: 'INACTIVE' })),
+    );
+    await ignoreMissing(
+      clients.iot.send(new DeleteCertificateCommand({ certificateId, forceDelete: true })),
+    );
+    console.warn(
+      JSON.stringify({ message: 'certificate discarded after a failed create', certificateId }),
+    );
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        message: 'could not discard the certificate after a failed create; delete it by hand',
+        certificateId,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
+  }
 }
 
 const response = (certificateId: string, certificateArn: string) => ({

@@ -1,7 +1,7 @@
 import pg from 'pg';
 import { describe, expect, it } from 'vitest';
 import { bootstrap } from './index.js';
-import { describe as describeSteps, plan } from './plan.js';
+import { plan, summarise } from './plan.js';
 
 const none = { roles: new Set<string>(), databases: new Set<string>() };
 
@@ -33,9 +33,23 @@ describe('database bootstrap plan', () => {
   });
 
   it('never logs a password', () => {
-    const log = describeSteps(plan([{ name: 'ops', password: 'hunter2' }], none)).join('\n');
+    const log = summarise(plan([{ name: 'ops', password: 'hunter2' }], none)).join('\n');
     expect(log).not.toContain('hunter2');
     expect(log).toContain('CREATE ROLE %I (ops)');
+  });
+
+  it('never logs a password for a role that already exists either', () => {
+    const existing = { roles: new Set(['ops']), databases: new Set(['ops']) };
+    const log = summarise(plan([{ name: 'ops', password: 'hunter2' }], existing)).join('\n');
+    expect(log).not.toContain('hunter2');
+    expect(log).toContain('ALTER ROLE %I (ops)');
+  });
+
+  it('keeps every secret out of every step log, whatever the step', () => {
+    const steps = plan([{ name: 'ops', password: 'hunter2' }], none);
+    // The password is still passed to the server as an argument; only its log form leaves it out.
+    expect(steps.some((step) => step.args.includes('hunter2'))).toBe(true);
+    for (const step of steps) expect(step.log).not.toContain('hunter2');
   });
 });
 
