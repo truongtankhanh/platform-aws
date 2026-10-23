@@ -81,9 +81,10 @@ Network ──▶ Data ──▶ CommandCenter ──▶ Telemetry
 ### Conventions the code relies on
 
 1. **Stages differ only in `lib/config.ts`.** Stacks never branch on the stage name. The one other
-   switch is `config.site`: when present, the stack uses the custom domain, HTTPS to the origin, real
-   cameras and the `NoReadings` alarm. A staging deploy with a site file therefore behaves like a
-   production one in those respects.
+   switch is `config.site`: when present, the stack uses the custom domain, HTTPS to the origin and
+   real cameras. A staging deploy with a site file therefore behaves like a production one in those
+   respects. Whether devices are expected, and so whether silence alarms, is its own setting
+   (`telemetry.devicesExpected`).
 2. **The consumer owns the security-group rule.** `allowDatabaseAccess` and the `IngestTo*` rules are
    created in the service's own stack. Creating them on the database or API side would make the
    stacks depend on each other in a cycle. Follow the same pattern for anything new.
@@ -107,7 +108,7 @@ synth.
 | Device policy topic `campus/<zone>/<thing>/telemetry`                           | `telemetry.ts`                                               | Devices cannot publish                                                             |
 | Realm contents: clients `occ-console`, `telemetry-pipeline`, audience `occ-api` | OCC repo (`docker/keycloak/occ-realm.json`)                  | Sign-in or alert delivery breaks; `prepare-realm.sh` only strips users and secrets |
 | Ingest `minHealthyPercent: 100`; Keycloak `0 / 100`                             | `telemetry.ts`, `command-center.ts`                          | Dropped QoS 1 messages during deploys; two Keycloak nodes with separate caches     |
-| ECR name `platform-<stage>/<image>` and tag `<occ>-<itp>-<run>`                 | `registry.ts`, `deploy.yml`                                  | Tasks cannot pull their image                                                      |
+| ECR name `platform-<stage>/<image>` and tag `<occ>-<itp>-<run>-<attempt>`       | `registry.ts`, `deploy.yml`                                  | Tasks cannot pull their image                                                      |
 | Region `ap-southeast-1`; CloudFront certificate in `us-east-1`                  | `config.ts`, `deploy.yml`, `site.json`                       | Synth or deploy refuses                                                            |
 | Header `X-Viewer-Address` (CloudFront Function writes, WAF keys on it)          | `command-center.ts`                                          | Rate limits key on a forgeable address                                             |
 | Database name = login name = secret `username`, lowercase `[a-z][a-z0-9_]*`     | `data.ts`, `lambda/database-bootstrap/plan.ts`               | Bootstrap throws                                                                   |
@@ -212,6 +213,12 @@ these, which the ADRs list as designed but never observed. Update the ADRs when 
 7. **Rollbacks.** The ECS circuit breaker rolls back an unhealthy release.
 8. **Console publish.** Client-side routes load, `index.html` is revalidated, hashed assets are
    cached.
+9. **ECS Exec logging.** Open `aws ecs execute-command` on the Keycloak task and check the session
+   appears in the Network stack's `ExecLogs` group (the task role may write there). Then open the
+   runbook's port-forward and check whether it appears there too; it is expected not to, in which
+   case only CloudTrail records it.
+10. **Database parameter group.** RDS accepts `log_parameter_max_length = 0` (ADR-0008), and a slow
+    statement is logged without its values.
 
 ## 7. Operating it
 
@@ -225,7 +232,7 @@ symptom-to-first-check table is in the runbook.
 | `CpuHigh`, `StorageLow`                | Data          | DB CPU above 80 % for 15 min; free storage under 10 % of the initial volume for 15 min (autoscaling not keeping up or at its maximum) |
 | `SequenceGaps`                         | Telemetry     | Devices reported lost messages                                                                                                        |
 | `IngestTasksLow`                       | Telemetry     | Fewer ingest tasks running than the stage's minimum for 5 min                                                                         |
-| `NoReadings`                           | Telemetry     | No readings for 15 min. Only when a site is configured. It also fires if the metrics collector stops                                  |
+| `NoReadings`                           | Telemetry     | No readings for 15 min. Only where `telemetry.devicesExpected` is set. It also fires if the metrics collector stops                   |
 
 Task counts come from Container Insights (enabled on the cluster) and treat missing data as
 breaching, because a service with no task can stop reporting. There is still no alarm on the API's
@@ -250,9 +257,10 @@ Ordered by how much I would worry. None is fixed here; each is a candidate ticke
    required reviewers on the `production` GitHub environment, which is configured outside this
    repository.
 5. **Floating inputs.** `occ_ref` and `itp_ref` default to `main`; the Keycloak base image is a
-   minor tag, not a digest; the RDS CA bundle is fetched with `ADD <url>` without a checksum; and
-   `imageTag` in `config.ts` defaults to `latest`, which the workflow never pushes, so a manual
-   `cdk deploy` without `-c imageTag=…` points tasks at an image that does not exist.
+   minor tag, not a digest; and the RDS CA bundle is fetched with `ADD <url>` without a checksum.
+   (The image tag itself is now safe: the repositories are immutable, the tag carries the attempt
+   number, and a stage has the tag `unset-pass-imageTag` until a deploy names one, so a manual
+   `cdk deploy` without `-c imageTag=…` fails to pull and rolls back, with a name that says why.)
 6. **Coupling to the other two repositories.** CI checks out OCC `main` and reads
    `docker/keycloak/occ-realm.json`; `deploy.yml` assumes `docker/api/Dockerfile`,
    `apps/ingest/Dockerfile` and `pnpm --filter @occ/console`. A refactor upstream breaks CI or

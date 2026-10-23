@@ -42,6 +42,13 @@ Option 3.
 
 ## Consequences
 
+- **Audit of the admin route.** The cluster logs `aws ecs execute-command` sessions (a shell in
+  the Keycloak task) to a log group of the Network stack, and the task role may write there. The
+  port-forward used to reach the admin console is an SSM session carrying HTTP: CloudTrail records
+  who opened it, but neither ECS nor SSM records what was done inside. That belongs to Keycloak's
+  admin events, which the imported realm does not enable today (it is the command center's realm).
+  Whether a port-forward session also lands in the exec log is not something to assume; check it
+  on the first deployment.
 - The platform now runs and upgrades an identity provider. The image pins a Keycloak minor
   release (26.8, as the command center's Compose stack does); patch releases arrive when the image
   is rebuilt, and a minor upgrade is a deliberate change.

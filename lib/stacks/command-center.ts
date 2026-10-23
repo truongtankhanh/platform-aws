@@ -302,6 +302,10 @@ export class CommandCenterStack extends Stack {
         services: [{ portMappingName: 'keycloak', dnsName: 'keycloak', port: KEYCLOAK_PORT }],
       },
     });
+    // CDK grants the task role what ECS Exec needs because of `enableExecuteCommand`: the ssmmessages
+    // actions and, since the cluster logs sessions to one log group (network.ts), write access to
+    // that group (without a configured group it would be every log group). A session whose log
+    // cannot be written does not start.
     allowDatabaseAccess(
       this,
       'KeycloakToDatabase',

@@ -2,7 +2,7 @@ import { RemovalPolicy, type Stack } from 'aws-cdk-lib';
 import { Match } from 'aws-cdk-lib/assertions';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { resolveStage, STAGES } from '../lib/config.js';
+import { resolveStage, STAGES, UNSET_IMAGE_TAG } from '../lib/config.js';
 import { logPolicy, retention } from '../lib/retention.js';
 import {
   containers,
@@ -42,6 +42,15 @@ describe('configuration', () => {
   it('refuses a stage that needs site values without them', () => {
     expect(() => resolveStage({ stage: 'production' })).toThrow(/needs site values/);
     expect(() => resolveStage({ stage: 'nope' })).toThrow(/Unknown stage/);
+  });
+
+  it('has no usable image tag until a deploy names one', () => {
+    for (const name of ['staging', 'production']) {
+      expect(STAGES[name]!.imageTag).toBe(UNSET_IMAGE_TAG);
+    }
+    // Not `latest`: nothing pushes it, and a mutable tag is what the registry no longer allows.
+    expect(UNSET_IMAGE_TAG).not.toBe('latest');
+    expect(resolveStage({ stage: 'staging', imageTag: 'abc-1-2-1' }).imageTag).toBe('abc-1-2-1');
   });
 
   it('keeps every stage in one region and on a supported log retention', () => {
@@ -188,6 +197,61 @@ describe('alarms', () => {
   });
 });
 
+describe('what a stage runs and who can get in', () => {
+  it('holds each release under a tag that nothing can move', () => {
+    for (const x of [staging, production]) {
+      const repositories = Object.values(
+        x.template('registry').findResources('AWS::ECR::Repository'),
+      );
+      expect(repositories).toHaveLength(3);
+      for (const repository of repositories) {
+        expect(repository.Properties.ImageTagMutability).toBe('IMMUTABLE');
+      }
+    }
+  });
+
+  it('logs every ECS Exec session, and only Keycloak enables ECS Exec and may write the log', () => {
+    for (const x of [staging, production]) {
+      x.template('network').hasResourceProperties('AWS::ECS::Cluster', {
+        Configuration: {
+          ExecuteCommandConfiguration: {
+            Logging: 'OVERRIDE',
+            LogConfiguration: { CloudWatchLogGroupName: Match.anyValue() },
+          },
+        },
+      });
+
+      const enabled = (stack: 'commandCenter' | 'telemetry') =>
+        Object.values(x.template(stack).findResources('AWS::ECS::Service')).filter(
+          (service) => service.Properties.EnableExecuteCommand === true,
+        );
+      expect(enabled('commandCenter')).toHaveLength(1);
+      expect(enabled('telemetry')).toHaveLength(0);
+
+      // A session whose log cannot be written does not start, so Keycloak's task role (not its
+      // execution role) may write log streams. Only in the ECS Exec log group: with no group named
+      // on the cluster, CDK grants the same actions on every log group.
+      const statements = Object.entries(
+        x.template('commandCenter').findResources('AWS::IAM::Policy'),
+      )
+        .filter(([id]) => id.startsWith('KeycloakTaskTaskRole'))
+        .flatMap(
+          ([, policy]) =>
+            policy.Properties.PolicyDocument.Statement as Array<{
+              Action: string | string[];
+              Resource: unknown;
+            }>,
+        );
+      const writes = statements.filter((s) => [s.Action].flat().includes('logs:PutLogEvents'));
+      expect(writes.length).toBeGreaterThan(0);
+      for (const write of writes) {
+        expect(write.Resource).not.toBe('*');
+        expect(flatten(write.Resource)).toContain('ExecLogs');
+      }
+    }
+  });
+});
+
 describe('network', () => {
   it('has public, private and isolated tiers, and isolated subnets have no route out', () => {
     const t = staging.template('network');
@@ -225,6 +289,18 @@ describe('database', () => {
     staging.template('data').hasResourceProperties('AWS::RDS::DBParameterGroup', {
       Parameters: Match.objectLike({ 'rds.force_ssl': '1' }),
     });
+  });
+
+  it('logs slow statements without the values bound to them', () => {
+    // The log goes to CloudWatch; the bound values are the services' data.
+    for (const x of [staging, production]) {
+      x.template('data').hasResourceProperties('AWS::RDS::DBParameterGroup', {
+        Parameters: Match.objectLike({
+          log_min_duration_statement: '1000',
+          log_parameter_max_length: '0',
+        }),
+      });
+    }
   });
 
   it('creates one database and login per system through the bootstrap', () => {
@@ -541,6 +617,10 @@ describe('telemetry', () => {
       );
     expect(silence(staging)).toHaveLength(0);
     expect(silence(production)).toHaveLength(1);
+    // The switch is the stage's `devicesExpected`, not whether a site file was given: a demo stage
+    // with a site (a domain and real cameras) still has no devices.
+    expect(STAGES.staging!.telemetry.devicesExpected).toBe(false);
+    expect(silence(synth('staging', 'test', exampleSite))).toHaveLength(0);
   });
 
   it('alarms on any lost message', () => {

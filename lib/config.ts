@@ -73,6 +73,11 @@ export interface StageConfig {
        */
       mqttConnections: number;
     };
+    /**
+     * Devices are expected to be sending, so silence is an incident (the `NoReadings` alarm). A demo
+     * stage has none and would alarm for ever. Independent of whether a site is configured.
+     */
+    devicesExpected: boolean;
   };
 
   observability: {
@@ -88,8 +93,27 @@ export interface StageConfig {
   /** Values only a site can provide. Required by stages that are not demos. */
   site?: SiteValues;
 
-  /** Tag of the images in this stage's ECR repositories, set by the deploy workflow. */
+  /**
+   * Tag of the images in this stage's ECR repositories, set by the deploy workflow
+   * (`-c imageTag=...`). Until one is given it is `UNSET_IMAGE_TAG`.
+   */
   imageTag: string;
+}
+
+/**
+ * The tag a stage has until a deploy names one. It is not a real tag: a deploy that forgets the
+ * flag fails to pull its images and rolls back, with a name that says why, instead of pointing at
+ * a `latest` that nothing pushes (and that an immutable repository could not hold anyway).
+ */
+export const UNSET_IMAGE_TAG = 'unset-pass-imageTag';
+
+/**
+ * The name of one of a stage's stacks, `Platform-<Stage>-<Stack>`. Stack names carry the stage so
+ * that stages live side by side in one account; cdk-nag findings that mention a cross-stack
+ * reference carry it too.
+ */
+export function stackName(config: Pick<StageConfig, 'name'>, stack: string): string {
+  return `Platform-${config.name.charAt(0).toUpperCase()}${config.name.slice(1)}-${stack}`;
 }
 
 export type DatabaseName = 'ops' | 'keycloak' | 'telemetry';
@@ -152,9 +176,10 @@ const staging: StageConfig = {
       targetCpuPercent: 60,
       mqttConnections: 2,
     },
+    devicesExpected: false,
   },
   observability: { logRetentionDays: 14, retainLogs: false },
-  imageTag: 'latest',
+  imageTag: UNSET_IMAGE_TAG,
 };
 
 const production: StageConfig = {
@@ -186,9 +211,10 @@ const production: StageConfig = {
       targetCpuPercent: 60,
       mqttConnections: 4,
     },
+    devicesExpected: true,
   },
   observability: { logRetentionDays: 90, retainLogs: true },
-  imageTag: 'latest',
+  imageTag: UNSET_IMAGE_TAG,
 };
 
 export const STAGES: Record<string, StageConfig> = { staging, production };

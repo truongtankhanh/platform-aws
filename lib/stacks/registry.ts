@@ -24,6 +24,9 @@ export class RegistryStack extends Stack {
       repositories[name] = new ecr.Repository(this, name, {
         repositoryName: `platform-${props.config.name}/${name}`,
         imageScanOnPush: true,
+        // Every release has its own tag (<occ sha>-<itp sha>-<run>-<attempt>), so nothing needs to
+        // move a tag. What a stage runs is then fixed by the tag in its task definition.
+        imageTagMutability: ecr.TagMutability.IMMUTABLE,
         encryption: ecr.RepositoryEncryption.AES_256,
         removalPolicy: RemovalPolicy.RETAIN,
         lifecycleRules: [

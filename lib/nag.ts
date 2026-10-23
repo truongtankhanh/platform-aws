@@ -1,6 +1,6 @@
 import { type Stack, Validations } from 'aws-cdk-lib';
 import type { IConstruct } from 'constructs';
-import type { StageConfig } from './config.js';
+import { stackName, type StageConfig } from './config.js';
 
 /**
  * Every cdk-nag finding this project accepts, with the reason, in one place. Findings are
@@ -10,7 +10,11 @@ import type { StageConfig } from './config.js';
 interface Acknowledgement {
   /** Matched against the end of the construct path. */
   path: RegExp;
-  id: string;
+  /**
+   * The finding id. A function when the id carries something that depends on the stage, such as the
+   * name of the stack a cross-stack reference comes from.
+   */
+  id: string | ((config: StageConfig) => string);
   reason: string;
   /** Only for stages where this holds. */
   when?: (config: StageConfig) => boolean;
@@ -144,7 +148,18 @@ const ACKNOWLEDGEMENTS: Acknowledgement[] = [
     path: /KeycloakTask\/TaskRole\/DefaultPolicy\/Resource$/,
     id: anyResource,
     reason:
-      'ECS Exec (ssmmessages:*) supports no resource-level permissions; it is how administrators reach the Keycloak admin console.',
+      'ECS Exec supports no resource-level permissions for ssmmessages:* and logs:DescribeLogGroups. Only those two remain on *: the log stream actions are limited to the ECS Exec log group (next entry). Before the cluster named a log group, CDK granted them on * and this entry hid that.',
+  },
+  {
+    path: /KeycloakTask\/TaskRole\/DefaultPolicy\/Resource$/,
+    // The statement is CDK's own (BaseService, because the cluster names a log group for ECS Exec).
+    // The log group lives in the Network stack, so the ARN in this policy is a cross-stack
+    // reference, named after that stack and after the group's construct path (ExecLogs). Renaming
+    // either breaks this id (see the recipe on construct ids in docs/handover.md).
+    id: (config) =>
+      `AwsSolutions::AwsSolutions-IAM5[Resource::arn:<AWS::Partition>:logs:${config.env.region}:<AWS::AccountId>:log-group:${stackName(config, 'Network')}:ExportsOutputRefExecLogs6390DA4981BE8914:*]`,
+    reason:
+      "ECS Exec sessions are logged to one log group; the task role may write log streams in that group only. The trailing :* is the stream part of a log group's ARN, not a wildcard over groups.",
   },
   {
     path: /(ApiTask|IngestTask)\/TaskRole\/DefaultPolicy\/Resource$/,
@@ -190,9 +205,10 @@ export function applyAcknowledgements(stack: Stack, config: StageConfig): void {
   const constructs: IConstruct[] = stack.node.findAll();
   for (const ack of ACKNOWLEDGEMENTS) {
     if (ack.when && !ack.when(config)) continue;
+    const id = typeof ack.id === 'function' ? ack.id(config) : ack.id;
     for (const construct of constructs) {
       if (ack.path.test(construct.node.path)) {
-        Validations.of(construct).acknowledge({ id: ack.id, reason: ack.reason });
+        Validations.of(construct).acknowledge({ id, reason: ack.reason });
       }
     }
   }

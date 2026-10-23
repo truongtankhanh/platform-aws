@@ -1,6 +1,6 @@
 import { Tags, Validations, type App } from 'aws-cdk-lib';
 import { AwsSolutionsChecks } from 'cdk-nag';
-import type { StageConfig } from './config.js';
+import { stackName, type StageConfig } from './config.js';
 import { applyAcknowledgements } from './nag.js';
 import { CommandCenterStack } from './stacks/command-center.js';
 import { DataStack } from './stacks/data.js';
@@ -22,7 +22,7 @@ export interface Platform {
  */
 export function buildPlatform(app: App, config: StageConfig): Platform {
   const env = config.env;
-  const name = (stack: string) => `Platform-${capitalise(config.name)}-${stack}`;
+  const name = (stack: string) => stackName(config, stack);
 
   const registry = new RegistryStack(app, name('Registry'), { env, config });
   const network = new NetworkStack(app, name('Network'), { env, config });
@@ -68,5 +68,3 @@ export function buildPlatform(app: App, config: StageConfig): Platform {
   Validations.of(app).addPlugins(new AwsSolutionsChecks(app, { verbose: true }));
   return platform;
 }
-
-const capitalise = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);

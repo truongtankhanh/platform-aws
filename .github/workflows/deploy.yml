@@ -63,7 +63,9 @@ jobs:
         env:
           SITE_JSON: ${{ vars.SITE_JSON }}
         run: |
-          tag="$(git -C occ rev-parse --short HEAD)-$(git -C itp rev-parse --short HEAD)-${GITHUB_RUN_NUMBER}"
+          # The ECR repositories are immutable, so a re-run of this workflow (same run number) must
+          # not push the same tag again: the attempt number keeps every tag unique.
+          tag="$(git -C occ rev-parse --short HEAD)-$(git -C itp rev-parse --short HEAD)-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           args="-c stage=$STAGE -c imageTag=$tag"
           if [ -n "$SITE_JSON" ]; then

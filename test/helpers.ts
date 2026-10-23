@@ -17,13 +17,18 @@ export interface Synthesised {
   template: (stack: keyof Platform) => Template;
 }
 
-/** Synthesises one stage the way `cdk synth` does, with the project's feature flags. */
-export function synth(stage: 'staging' | 'production', imageTag = 'test'): Synthesised {
+/**
+ * Synthesises one stage the way `cdk synth` does, with the project's feature flags. `site`
+ * defaults to the example site for production and to none for staging; pass one to see what a
+ * site changes on its own.
+ */
+export function synth(
+  stage: 'staging' | 'production',
+  imageTag = 'test',
+  site: SiteValues | undefined = stage === 'production' ? exampleSite : undefined,
+): Synthesised {
   const app = new App({ context: { ...cdkJson.context, stage } });
-  const platform = buildPlatform(
-    app,
-    resolveStage({ stage, imageTag, site: stage === 'production' ? exampleSite : undefined }),
-  );
+  const platform = buildPlatform(app, resolveStage({ stage, imageTag, site }));
   const cache = new Map<keyof Platform, Template>();
   return {
     app,

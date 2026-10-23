@@ -47,9 +47,18 @@ export class NetworkStack extends Stack {
     // Image layers and S3 traffic stay off the NAT gateways.
     this.vpc.addGatewayEndpoint('S3', { service: ec2.GatewayVpcEndpointAwsService.S3 });
 
+    // A shell in a task (`aws ecs execute-command`) is logged here: what was typed and what came
+    // back, rather than left to whoever has the IAM right. Not covered: the port-forward the
+    // runbook uses for the Keycloak admin console is an SSM session that carries HTTP. CloudTrail
+    // records who opened it; what was done inside is Keycloak's to record (its admin events).
+    const execLogs = logGroup(this, 'ExecLogs', logPolicy(config.observability));
     this.cluster = new ecs.Cluster(this, 'Cluster', {
       vpc: this.vpc,
       containerInsightsV2: ecs.ContainerInsights.ENABLED,
+      executeCommandConfiguration: {
+        logging: ecs.ExecuteCommandLogging.OVERRIDE,
+        logConfiguration: { cloudWatchLogGroup: execLogs },
+      },
     });
     // Service Connect: services call each other by short name (`keycloak`, `occ-api`).
     this.cluster.addDefaultCloudMapNamespace({

@@ -37,6 +37,10 @@ export class DataStack extends Stack {
         // Every client verifies the server certificate; plaintext is refused.
         'rds.force_ssl': '1',
         log_min_duration_statement: '1000',
+        // A slow statement is logged with its text but not with the values bound to it: those are
+        // the services' data (incident text, identifiers), and the log goes to CloudWatch for the
+        // stage's retention. The default would log them in full (docs/adr/0008).
+        log_parameter_max_length: '0',
         log_lock_waits: '1',
       },
     });

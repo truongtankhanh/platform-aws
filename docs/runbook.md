@@ -48,8 +48,11 @@ first deployment and day-to-day operation take.
 ## Deploying
 
 Run the **Deploy** workflow with the stage and the refs of the two systems. It deploys the
-registry, builds and pushes the three images tagged `<occ sha>-<itp sha>-<run>`, deploys every
-stack with that tag, then publishes the console and invalidates `index.html`.
+registry, builds and pushes the three images tagged `<occ sha>-<itp sha>-<run>-<attempt>`, deploys
+every stack with that tag, then publishes the console and invalidates `index.html`. The
+repositories are immutable, so each tag exists once; re-running a failed workflow gets a new
+attempt number and therefore a new tag. A manual `cdk deploy` must pass `-c imageTag=<tag>`; without
+it the tasks ask for the tag `unset-pass-imageTag`, which does not exist, and roll back.
 
 ECS deployments roll with a circuit breaker: a release whose tasks never become healthy rolls back
 on its own. A failed CloudFormation update rolls back the stack.

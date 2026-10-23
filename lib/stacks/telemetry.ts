@@ -267,7 +267,7 @@ export class TelemetryStack extends Stack {
       alarmDescription: `Fewer than ${ingest.minTasks} ingest task(s) running for 5 minutes: telemetry is not consumed at full capacity`,
     });
     // Only where devices are expected: a demo stage has none, and would alarm for ever.
-    if (config.site) {
+    if (config.telemetry.devicesExpected) {
       props.alarms.alarm(this, 'NoReadings', {
         metric: new cloudwatch.Metric({
           namespace: 'Platform/Telemetry',
