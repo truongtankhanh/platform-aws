@@ -7,7 +7,6 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import type * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
-import * as logs from 'aws-cdk-lib/aws-logs';
 import type * as rds from 'aws-cdk-lib/aws-rds';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
@@ -18,7 +17,7 @@ import type { AlarmTopic } from '../constructs/alarm-topic.js';
 import { CloudFrontOriginPrefixList } from '../constructs/cloudfront-prefix-list.js';
 import { MetricsSidecar } from '../constructs/metrics-sidecar.js';
 import { allowDatabaseAccess } from '../database-access.js';
-import { retention } from '../retention.js';
+import { logGroup, logPolicy } from '../retention.js';
 
 export interface CommandCenterStackProps extends StackProps {
   config: StageConfig;
@@ -69,9 +68,8 @@ export class CommandCenterStack extends Stack {
     super(scope, id, props);
     const { config } = props;
     const cc = config.commandCenter;
-    const logRetention = retention(config.observability.logRetentionDays);
+    const logging = logPolicy(config.observability);
     const site = config.site;
-    const removal = RemovalPolicy.DESTROY;
 
     // ---------------------------------------------------------------- logs and buckets
 
@@ -82,8 +80,10 @@ export class CommandCenterStack extends Stack {
       // CloudFront standard logging writes with ACLs.
       objectOwnership: s3.ObjectOwnership.OBJECT_WRITER,
       lifecycleRules: [{ expiration: Duration.days(config.observability.logRetentionDays) }],
-      removalPolicy: removal,
-      autoDeleteObjects: true,
+      // Follows the stage's log policy (docs/adr/0007). Emptying a bucket on deletion only makes
+      // sense when the bucket is deleted too, so a bucket that is kept keeps its objects.
+      removalPolicy: logging.removalPolicy,
+      autoDeleteObjects: logging.removalPolicy === RemovalPolicy.DESTROY,
     });
 
     this.consoleBucket = new s3.Bucket(this, 'Console', {
@@ -94,7 +94,8 @@ export class CommandCenterStack extends Stack {
       serverAccessLogsBucket: accessLogs,
       serverAccessLogsPrefix: 'console-bucket/',
       lifecycleRules: [{ noncurrentVersionExpiration: Duration.days(30) }],
-      removalPolicy: removal,
+      // Not evidence of anything: every deploy rebuilds and republishes the console.
+      removalPolicy: RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
     });
 
@@ -270,10 +271,7 @@ export class CommandCenterStack extends Stack {
       },
       logging: ecs.LogDrivers.awsLogs({
         streamPrefix: 'keycloak',
-        logGroup: new logs.LogGroup(this, 'KeycloakLogs', {
-          retention: logRetention,
-          removalPolicy: removal,
-        }),
+        logGroup: logGroup(this, 'KeycloakLogs', logging),
       }),
     });
 
@@ -412,10 +410,7 @@ export class CommandCenterStack extends Stack {
       },
       logging: ecs.LogDrivers.awsLogs({
         streamPrefix: 'api',
-        logGroup: new logs.LogGroup(this, 'ApiLogs', {
-          retention: logRetention,
-          removalPolicy: removal,
-        }),
+        logGroup: logGroup(this, 'ApiLogs', logging),
       }),
     });
 
@@ -430,8 +425,7 @@ export class CommandCenterStack extends Stack {
         },
         { dimensions: [['env']], metricNameSelectors: ['^realtime_connected_consoles$'] },
       ],
-      retention: logRetention,
-      removalPolicy: removal,
+      logs: logging,
     });
 
     const apiSecurityGroup = (this.apiSecurityGroup = new ec2.SecurityGroup(

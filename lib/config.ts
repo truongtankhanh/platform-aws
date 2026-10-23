@@ -77,6 +77,12 @@ export interface StageConfig {
 
   observability: {
     logRetentionDays: number;
+    /**
+     * Keep the log groups and the access-log bucket when their stack is deleted (docs/adr/0007).
+     * They are the evidence of what happened, so a stage that matters must not lose them with the
+     * stack; a demo stage that is torn down and rebuilt should not leave them behind.
+     */
+    retainLogs: boolean;
   };
 
   /** Values only a site can provide. Required by stages that are not demos. */
@@ -147,7 +153,7 @@ const staging: StageConfig = {
       mqttConnections: 2,
     },
   },
-  observability: { logRetentionDays: 14 },
+  observability: { logRetentionDays: 14, retainLogs: false },
   imageTag: 'latest',
 };
 
@@ -181,7 +187,7 @@ const production: StageConfig = {
       mqttConnections: 4,
     },
   },
-  observability: { logRetentionDays: 90 },
+  observability: { logRetentionDays: 90, retainLogs: true },
   imageTag: 'latest',
 };
 

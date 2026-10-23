@@ -1,10 +1,9 @@
-import { Aws, Duration, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib';
+import { Aws, Duration, Stack, type StackProps } from 'aws-cdk-lib';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import type * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as iot from 'aws-cdk-lib/aws-iot';
-import * as logs from 'aws-cdk-lib/aws-logs';
 import type * as rds from 'aws-cdk-lib/aws-rds';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as cr from 'aws-cdk-lib/custom-resources';
@@ -14,7 +13,7 @@ import type { AlarmTopic } from '../constructs/alarm-topic.js';
 import { IotClientCertificate } from '../constructs/iot-client-certificate.js';
 import { MetricsSidecar } from '../constructs/metrics-sidecar.js';
 import { allowDatabaseAccess } from '../database-access.js';
-import { retention } from '../retention.js';
+import { logGroup, logPolicy } from '../retention.js';
 
 export interface TelemetryStackProps extends StackProps {
   config: StageConfig;
@@ -47,7 +46,7 @@ export class TelemetryStack extends Stack {
     super(scope, id, props);
     const { config } = props;
     const ingest = config.telemetry.ingest;
-    const logRetention = retention(config.observability.logRetentionDays);
+    const logs = logPolicy(config.observability);
     const arn = (resource: string) =>
       `arn:${Aws.PARTITION}:iot:${Aws.REGION}:${Aws.ACCOUNT_ID}:${resource}`;
 
@@ -100,7 +99,7 @@ export class TelemetryStack extends Stack {
 
     const certificate = new IotClientCertificate(this, 'IngestCertificate', {
       policy: this.ingestPolicy,
-      logRetention,
+      logs,
     });
 
     const endpoint = new cr.AwsCustomResource(this, 'IotEndpoint', {
@@ -170,10 +169,7 @@ export class TelemetryStack extends Stack {
       stopTimeout: Duration.seconds(30),
       logging: ecs.LogDrivers.awsLogs({
         streamPrefix: 'ingest',
-        logGroup: new logs.LogGroup(this, 'IngestLogs', {
-          retention: logRetention,
-          removalPolicy: RemovalPolicy.DESTROY,
-        }),
+        logGroup: logGroup(this, 'IngestLogs', logs),
       }),
     });
 
@@ -190,8 +186,7 @@ export class TelemetryStack extends Stack {
         { dimensions: [['reason']], metricNameSelectors: ['^telemetry_rejections_total$'] },
         { dimensions: [[]], metricNameSelectors: ['^telemetry_buffered_readings$'] },
       ],
-      retention: logRetention,
-      removalPolicy: RemovalPolicy.DESTROY,
+      logs,
     });
 
     const securityGroup = new ec2.SecurityGroup(this, 'IngestSecurityGroup', {

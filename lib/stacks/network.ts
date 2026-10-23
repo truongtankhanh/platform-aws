@@ -1,11 +1,10 @@
-import { RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib';
+import { Stack, type StackProps } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
-import * as logs from 'aws-cdk-lib/aws-logs';
 import type { Construct } from 'constructs';
 import type { StageConfig } from '../config.js';
 import { AlarmTopic } from '../constructs/alarm-topic.js';
-import { retention } from '../retention.js';
+import { logGroup, logPolicy } from '../retention.js';
 
 export interface NetworkStackProps extends StackProps {
   config: StageConfig;
@@ -40,10 +39,7 @@ export class NetworkStack extends Stack {
         rejected: {
           trafficType: ec2.FlowLogTrafficType.REJECT,
           destination: ec2.FlowLogDestination.toCloudWatchLogs(
-            new logs.LogGroup(this, 'FlowLogs', {
-              retention: retention(config.observability.logRetentionDays),
-              removalPolicy: RemovalPolicy.DESTROY,
-            }),
+            logGroup(this, 'FlowLogs', logPolicy(config.observability)),
           ),
         },
       },

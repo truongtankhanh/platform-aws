@@ -90,11 +90,12 @@ stacks change only with a deliberate infrastructure change.
 
 ## Decisions
 
-| ADR                                                                | Decision                                                               |
-| ------------------------------------------------------------------ | ---------------------------------------------------------------------- |
-| [0001](adr/0001-cdk-in-typescript.md)                              | AWS CDK in TypeScript; typed stage config; cdk-nag on every synth      |
-| [0002](adr/0002-one-instance-per-stage-one-database-per-system.md) | One RDS instance per stage, one database and login per system          |
-| [0003](adr/0003-aws-iot-core-as-the-broker.md)                     | AWS IoT Core as the broker; certificates; connections × 100 msg/s      |
-| [0004](adr/0004-one-public-origin-through-cloudfront.md)           | One public origin through CloudFront; ALB only from CloudFront; WAF    |
-| [0005](adr/0005-metrics-through-an-in-task-collector.md)           | Prometheus metrics into CloudWatch through an in-task collector        |
-| [0006](adr/0006-keycloak-on-fargate.md)                            | Keycloak on Fargate as the identity provider, admin console not public |
+| ADR                                                                | Decision                                                                |
+| ------------------------------------------------------------------ | ----------------------------------------------------------------------- |
+| [0001](adr/0001-cdk-in-typescript.md)                              | AWS CDK in TypeScript; typed stage config; cdk-nag on every synth       |
+| [0002](adr/0002-one-instance-per-stage-one-database-per-system.md) | One RDS instance per stage, one database and login per system           |
+| [0003](adr/0003-aws-iot-core-as-the-broker.md)                     | AWS IoT Core as the broker; certificates; connections × 100 msg/s       |
+| [0004](adr/0004-one-public-origin-through-cloudfront.md)           | One public origin through CloudFront; ALB only from CloudFront; WAF     |
+| [0005](adr/0005-metrics-through-an-in-task-collector.md)           | Prometheus metrics into CloudWatch through an in-task collector         |
+| [0006](adr/0006-keycloak-on-fargate.md)                            | Keycloak on Fargate as the identity provider, admin console not public  |
+| [0007](adr/0007-production-keeps-its-logs.md)                      | Production keeps its log groups and access logs when a stack is deleted |

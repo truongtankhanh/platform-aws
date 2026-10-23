@@ -1,8 +1,8 @@
-import type { RemovalPolicy } from 'aws-cdk-lib';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as iam from 'aws-cdk-lib/aws-iam';
-import * as logs from 'aws-cdk-lib/aws-logs';
+import type * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
+import { logGroup, type LogPolicy } from '../retention.js';
 
 /** Pinned: the collector's config format changes between releases. */
 export const ADOT_COLLECTOR_IMAGE = 'public.ecr.aws/aws-observability/aws-otel-collector:v0.50.0';
@@ -23,8 +23,8 @@ export interface MetricsSidecarProps {
   namespace: string;
   /** Only declared metrics become CloudWatch metrics; everything stays queryable in the log group. */
   declarations: MetricDeclaration[];
-  retention: logs.RetentionDays;
-  removalPolicy: RemovalPolicy;
+  /** Retention and removal of the two log groups this construct creates. */
+  logs: LogPolicy;
 }
 
 /**
@@ -41,10 +41,7 @@ export class MetricsSidecar extends Construct {
   constructor(scope: Construct, id: string, props: MetricsSidecarProps) {
     super(scope, id);
 
-    this.logGroup = new logs.LogGroup(this, 'EmfLogGroup', {
-      retention: props.retention,
-      removalPolicy: props.removalPolicy,
-    });
+    this.logGroup = logGroup(this, 'EmfLogGroup', props.logs);
 
     const config = {
       receivers: {
@@ -85,10 +82,7 @@ export class MetricsSidecar extends Construct {
       environment: { AOT_CONFIG_CONTENT: JSON.stringify(config) },
       logging: ecs.LogDrivers.awsLogs({
         streamPrefix: 'collector',
-        logGroup: new logs.LogGroup(this, 'CollectorLogs', {
-          retention: props.retention,
-          removalPolicy: props.removalPolicy,
-        }),
+        logGroup: logGroup(this, 'CollectorLogs', props.logs),
       }),
     });
 

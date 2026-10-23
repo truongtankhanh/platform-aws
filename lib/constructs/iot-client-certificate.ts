@@ -3,15 +3,16 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import type * as iot from 'aws-cdk-lib/aws-iot';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
-import * as logs from 'aws-cdk-lib/aws-logs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
 import { fileURLToPath } from 'node:url';
+import { logGroup, type LogPolicy } from '../retention.js';
 
 export interface IotClientCertificateProps {
   policy: iot.CfnPolicy;
-  logRetention: logs.RetentionDays;
+  /** Retention and removal of the two log groups this construct creates. */
+  logs: LogPolicy;
 }
 
 /**
@@ -37,10 +38,7 @@ export class IotClientCertificate extends Construct {
       runtime: lambda.Runtime.NODEJS_24_X,
       architecture: lambda.Architecture.ARM_64,
       timeout: Duration.minutes(1),
-      logGroup: new logs.LogGroup(this, 'Logs', {
-        retention: props.logRetention,
-        removalPolicy: RemovalPolicy.DESTROY,
-      }),
+      logGroup: logGroup(this, 'Logs', props.logs),
       bundling: { format: OutputFormat.ESM, externalModules: ['@aws-sdk/*'] },
     });
     this.secret.grantWrite(fn);
@@ -67,10 +65,7 @@ export class IotClientCertificate extends Construct {
 
     const provider = new cr.Provider(this, 'Provider', {
       onEventHandler: fn,
-      logGroup: new logs.LogGroup(this, 'ProviderLogs', {
-        retention: props.logRetention,
-        removalPolicy: RemovalPolicy.DESTROY,
-      }),
+      logGroup: logGroup(this, 'ProviderLogs', props.logs),
     });
 
     const resource = new CustomResource(this, 'Resource', {

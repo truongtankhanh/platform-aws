@@ -1,20 +1,21 @@
-import { CustomResource, Duration, RemovalPolicy } from 'aws-cdk-lib';
+import { CustomResource, Duration } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
-import * as logs from 'aws-cdk-lib/aws-logs';
 import type * as rds from 'aws-cdk-lib/aws-rds';
 import type * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
 import { fileURLToPath } from 'node:url';
+import { logGroup, type LogPolicy } from '../retention.js';
 
 export interface DatabaseBootstrapProps {
   instance: rds.DatabaseInstance;
   vpc: ec2.IVpc;
   /** Database (and owning login) name → secret with `{ username, password }`. */
   databases: Record<string, secretsmanager.ISecret>;
-  logRetention: logs.RetentionDays;
+  /** Retention and removal of the two log groups this construct creates. */
+  logs: LogPolicy;
   /** Changing it re-runs the bootstrap (new passwords in the system secrets reach PostgreSQL). */
   generation: number;
 }
@@ -46,10 +47,7 @@ export class DatabaseBootstrap extends Construct {
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
       securityGroups: [securityGroup],
       environment: { NODE_EXTRA_CA_CERTS: '/var/runtime/ca-cert.pem' },
-      logGroup: new logs.LogGroup(this, 'Logs', {
-        retention: props.logRetention,
-        removalPolicy: RemovalPolicy.DESTROY,
-      }),
+      logGroup: logGroup(this, 'Logs', props.logs),
       bundling: {
         format: OutputFormat.ESM,
         externalModules: ['@aws-sdk/*', 'pg-native'],
@@ -64,10 +62,7 @@ export class DatabaseBootstrap extends Construct {
 
     const provider = new cr.Provider(this, 'Provider', {
       onEventHandler: this.function,
-      logGroup: new logs.LogGroup(this, 'ProviderLogs', {
-        retention: props.logRetention,
-        removalPolicy: RemovalPolicy.DESTROY,
-      }),
+      logGroup: logGroup(this, 'ProviderLogs', props.logs),
     });
 
     const resource = new CustomResource(this, 'Resource', {

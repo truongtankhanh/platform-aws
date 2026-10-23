@@ -87,13 +87,14 @@ Taking over the repository, or making your first change: [handover guide](docs/h
 
 ## Decisions
 
-[Architecture](docs/architecture.md) and six ADRs:
+[Architecture](docs/architecture.md) and seven ADRs:
 [CDK in TypeScript](docs/adr/0001-cdk-in-typescript.md) ·
 [one instance, one database per system](docs/adr/0002-one-instance-per-stage-one-database-per-system.md) ·
 [AWS IoT Core](docs/adr/0003-aws-iot-core-as-the-broker.md) ·
 [one origin through CloudFront](docs/adr/0004-one-public-origin-through-cloudfront.md) ·
 [metrics through a collector](docs/adr/0005-metrics-through-an-in-task-collector.md) ·
-[Keycloak on Fargate](docs/adr/0006-keycloak-on-fargate.md).
+[Keycloak on Fargate](docs/adr/0006-keycloak-on-fargate.md) ·
+[production keeps its logs](docs/adr/0007-production-keeps-its-logs.md).
 Platform-wide decisions are in
 [architecture-decisions](https://github.com/truongtankhanh/architecture-decisions).
 

@@ -7,7 +7,7 @@ import type { Construct } from 'constructs';
 import type { DatabaseName, StageConfig } from '../config.js';
 import type { AlarmTopic } from '../constructs/alarm-topic.js';
 import { DatabaseBootstrap } from '../constructs/database-bootstrap.js';
-import { retention } from '../retention.js';
+import { logPolicy, retention } from '../retention.js';
 
 export interface DataStackProps extends StackProps {
   config: StageConfig;
@@ -89,7 +89,7 @@ export class DataStack extends Stack {
       instance: this.instance,
       vpc: props.vpc,
       databases: secrets,
-      logRetention: retention(config.observability.logRetentionDays),
+      logs: logPolicy(config.observability),
       generation: db.loginGeneration,
     });
 

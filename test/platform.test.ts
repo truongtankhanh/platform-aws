@@ -1,9 +1,9 @@
-import type { Stack } from 'aws-cdk-lib';
+import { RemovalPolicy, type Stack } from 'aws-cdk-lib';
 import { Match } from 'aws-cdk-lib/assertions';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { resolveStage, STAGES } from '../lib/config.js';
-import { retention } from '../lib/retention.js';
+import { logPolicy, retention } from '../lib/retention.js';
 import {
   containers,
   environmentOf,
@@ -49,6 +49,64 @@ describe('configuration', () => {
       expect(() => retention(config.observability.logRetentionDays)).not.toThrow();
     }
     expect(() => retention(10)).toThrow(/not one CloudWatch supports/);
+  });
+});
+
+describe('logs', () => {
+  const stacks = ['network', 'data', 'commandCenter', 'telemetry'] as const;
+  const logGroups = (x: Synthesised) =>
+    stacks.flatMap((stack) =>
+      Object.values(x.template(stack).findResources('AWS::Logs::LogGroup')).map((group) => ({
+        stack,
+        group,
+      })),
+    );
+
+  it('derives the removal policy of every log group from the stage', () => {
+    expect(logPolicy(STAGES.staging!.observability).removalPolicy).toBe(RemovalPolicy.DESTROY);
+    expect(logPolicy(STAGES.production!.observability).removalPolicy).toBe(RemovalPolicy.RETAIN);
+  });
+
+  it('keeps every production log group when its stack is deleted', () => {
+    const groups = logGroups(production);
+    // Not vacuous: each stack that logs contributes at least one group.
+    for (const stack of stacks) expect(groups.some((g) => g.stack === stack)).toBe(true);
+    for (const { group } of groups) {
+      expect(group).toMatchObject({ DeletionPolicy: 'Retain', UpdateReplacePolicy: 'Retain' });
+    }
+  });
+
+  it('removes the demo stage log groups with their stack', () => {
+    const groups = logGroups(staging);
+    for (const stack of stacks) expect(groups.some((g) => g.stack === stack)).toBe(true);
+    for (const { group } of groups) {
+      expect(group).toMatchObject({ DeletionPolicy: 'Delete', UpdateReplacePolicy: 'Delete' });
+    }
+  });
+
+  it('keeps the production access logs with their bucket, and empties the demo bucket on delete', () => {
+    const bucket = (x: Synthesised, prefix: string) =>
+      Object.entries(x.template('commandCenter').findResources('AWS::S3::Bucket')).find(([id]) =>
+        id.startsWith(prefix),
+      )![1];
+    const autoDeleted = (x: Synthesised, prefix: string) =>
+      Object.values(x.template('commandCenter').findResources('Custom::S3AutoDeleteObjects')).some(
+        (r) => flatten(r).includes(prefix),
+      );
+
+    expect(bucket(production, 'AccessLogs')).toMatchObject({ DeletionPolicy: 'Retain' });
+    expect(autoDeleted(production, 'AccessLogs')).toBe(false);
+    expect(bucket(staging, 'AccessLogs')).toMatchObject({ DeletionPolicy: 'Delete' });
+    expect(autoDeleted(staging, 'AccessLogs')).toBe(true);
+  });
+
+  it('always removes the console bucket with its stack: every deploy rebuilds it', () => {
+    for (const x of [staging, production]) {
+      const [, console] = Object.entries(
+        x.template('commandCenter').findResources('AWS::S3::Bucket'),
+      ).find(([id]) => id.startsWith('Console'))!;
+      expect(console).toMatchObject({ DeletionPolicy: 'Delete' });
+    }
   });
 });
 
