@@ -23,8 +23,8 @@
     "constructs": "^10.8.1"
   },
   "devDependencies": {
-    "@aws-sdk/client-iot": "^3.1156.0",
-    "@aws-sdk/client-secrets-manager": "^3.1156.0",
+    "@aws-sdk/client-iot": "^3.1157.0",
+    "@aws-sdk/client-secrets-manager": "^3.1157.0",
     "@eslint/js": "^10.0.1",
     "@types/aws-lambda": "^8.10.164",
     "@types/node": "^24.19.2",
