@@ -2,7 +2,7 @@
   "name": "platform-aws",
   "private": true,
   "description": "AWS infrastructure (CDK, TypeScript) for the campus operations platform: ops-command-center and iot-telemetry-pipeline on ECS Fargate, RDS, CloudFront and AWS IoT Core.",
-  "license": "MIT",
+  "license": "UNLICENSED",
   "type": "module",
   "engines": {
     "node": ">=22"

@@ -3,7 +3,7 @@
 [![CI](https://github.com/truongtankhanh/platform-aws/actions/workflows/ci.yml/badge.svg)](https://github.com/truongtankhanh/platform-aws/actions/workflows/ci.yml)
 ![AWS CDK](https://img.shields.io/badge/AWS_CDK-v2-FF9900)
 ![cdk-nag](https://img.shields.io/badge/cdk--nag-AWS_Solutions-232F3E)
-![License: MIT](https://img.shields.io/badge/license-MIT-blue)
+![License: All rights reserved](https://img.shields.io/badge/license-All_rights_reserved-red)
 
 AWS infrastructure, as TypeScript CDK, for the campus operations platform:
 [ops-command-center](https://github.com/truongtankhanh/ops-command-center) (live incidents, map,
@@ -102,4 +102,4 @@ Platform-wide decisions are in
 
 ## License
 
-[MIT](LICENSE) © Trương Tấn Khánh
+© 2026 Trương Tấn Khánh. All rights reserved. See [LICENSE](LICENSE).
