@@ -18,7 +18,7 @@
     "format:check": "prettier --check ."
   },
   "dependencies": {
-    "aws-cdk-lib": "^2.274.0",
+    "aws-cdk-lib": "^2.275.0",
     "cdk-nag": "^3.0.2",
     "constructs": "^10.8.1"
   },
@@ -29,7 +29,7 @@
     "@types/aws-lambda": "^8.10.164",
     "@types/node": "^24.19.2",
     "@types/pg": "^8.23.1",
-    "aws-cdk": "^2.1146.1",
+    "aws-cdk": "^2.1148.0",
     "esbuild": "^0.28.2",
     "eslint": "^10.13.0",
     "globals": "^17.13.0",
